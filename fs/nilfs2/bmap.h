@@ -81,6 +81,11 @@ struct nilfs_bmap_operations {
 	int (*bop_check_insert)(const struct nilfs_bmap *, __u64);
 	int (*bop_check_delete)(struct nilfs_bmap *, __u64);
 	int (*bop_gather_data)(struct nilfs_bmap *, __u64 *, __u64 *, int);
+	int (*bop_find)(struct nilfs_bmap *bmap, __u64 *keyp, __u64 *ptrp,
+			void **context);
+	int (*bop_find_next)(struct nilfs_bmap *bmap, __u64 *keyp, __u64 *ptrp,
+			     void *context);
+	void (*bop_find_close)(struct nilfs_bmap *bmap, void *context);
 };
 
 
