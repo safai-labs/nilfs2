@@ -395,6 +395,66 @@ found:
 	return de;
 }
 
+struct nilfs_dir_entry *
+nilfs_find_entry_by_ino(struct inode *dir, ino_t ino, struct page **res_page)
+{
+	unsigned reclen = NILFS_DIR_REC_LEN(1);
+	unsigned long start, n;
+	unsigned long npages = dir_pages(dir);
+	struct page *page = NULL;
+	struct nilfs_inode_info *ii = NILFS_I(dir);
+	struct nilfs_dir_entry *de;
+	void *kaddr;
+
+	if (npages == 0)
+		goto out;
+
+	/* OFFSET_CACHE */
+	*res_page = NULL;
+
+	start = ii->i_dir_start_lookup;
+	if (start >= npages)
+		start = 0;
+	n = start;
+	do {
+		page = nilfs_get_page(dir, n);
+		if (!IS_ERR(page)) {
+			kaddr = page_address(page);
+			de = kaddr;
+			kaddr += nilfs_last_byte(dir, n) - reclen;
+			while ((void *)de <= kaddr) {
+				if (de->rec_len == 0) {
+					nilfs_error(dir->i_sb, __func__,
+						"zero-length directory entry");
+					nilfs_put_page(page);
+					goto out;
+				}
+				if (le64_to_cpu(de->inode) == ino)
+					goto found;
+				de = nilfs_next_entry(de);
+			}
+			nilfs_put_page(page);
+		}
+		if (++n >= npages)
+			n = 0;
+		/* next page is past the blocks we've got */
+		if (unlikely(n > (dir->i_blocks >> (PAGE_CACHE_SHIFT - 9)))) {
+			nilfs_error(dir->i_sb, __func__,
+			       "dir %lu size %lld exceeds block count %llu",
+			       dir->i_ino, dir->i_size,
+			       (unsigned long long)dir->i_blocks);
+			goto out;
+		}
+	} while (n != start);
+out:
+	return NULL;
+
+found:
+	*res_page = page;
+	ii->i_dir_start_lookup = n;
+	return de;
+}
+
 struct nilfs_dir_entry *nilfs_dotdot(struct inode *dir, struct page **p)
 {
 	struct page *page = nilfs_get_page(dir, 0);

@@ -229,6 +229,8 @@ extern ino_t nilfs_inode_by_name(struct inode *, const struct qstr *);
 extern int nilfs_make_empty(struct inode *, struct inode *);
 extern struct nilfs_dir_entry *
 nilfs_find_entry(struct inode *, const struct qstr *, struct page **);
+struct nilfs_dir_entry *
+nilfs_find_entry_by_ino(struct inode *dir, ino_t ino, struct page **res_page);
 extern int nilfs_delete_entry(struct nilfs_dir_entry *, struct page *);
 extern int nilfs_empty_dir(struct inode *);
 extern struct nilfs_dir_entry *nilfs_dotdot(struct inode *, struct page **);
