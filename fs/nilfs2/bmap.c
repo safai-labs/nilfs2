@@ -422,6 +422,160 @@ int nilfs_bmap_test_and_clear_dirty(struct nilfs_bmap *bmap)
 	return ret;
 }
 
+static ssize_t nilfs_bmap_do_compare(struct nilfs_bmap *bmap1,
+				     struct nilfs_bmap *bmap2, __u64 start,
+				     struct nilfs_bmap_diff *diffs,
+				     size_t maxdiffs)
+{
+	__u64 key1, key2;
+	__u64 ptr1, ptr2;
+	void *ctx1, *ctx2;
+	ssize_t n = 0;
+	int next1 = false, next2 = false;
+	int done1 = false, done2 = false;
+	int ret;
+
+	key1 = start;
+	ret = bmap1->b_ops->bop_find(bmap1, &key1, &ptr1, &ctx1);
+	if (ret < 0) {
+		if (ret != -ENOENT) {
+			n = ret;
+			goto out;
+		}
+		done1 = true;
+		ctx1 = NULL; /* ensure ->bop_find_close(bmap1, ctx1) safe */
+	}
+
+	key2 = start;
+	ret = bmap2->b_ops->bop_find(bmap2, &key2, &ptr2, &ctx2);
+	if (ret < 0) {
+		if (ret != -ENOENT) {
+			n = ret;
+			goto out;
+		}
+		done2 = true;
+		ctx2 = NULL; /* ensure ->bop_find_close(bmap2, ctx2) safe */
+	}
+
+	while (1) {
+		if (done1) {
+			if (done2)
+				break;
+			
+			diffs[n].key = key2;
+			diffs[n].ptr1 = NILFS_BMAP_INVALID_PTR;
+			diffs[n].ptr2 = ptr2;
+			next2 = true;
+		} else if (done2) {
+			diffs[n].key = key1;
+			diffs[n].ptr1 = ptr1;
+			diffs[n].ptr2 = NILFS_BMAP_INVALID_PTR;
+			next1 = true;
+		} else if (key1 == key2) {
+			next1 = true;
+			next2 = true;
+
+			if (ptr1 == ptr2)
+				goto lookup_next;
+
+			diffs[n].key = key1;
+			diffs[n].ptr1 = ptr1;
+			diffs[n].ptr2 = ptr2;
+		} else if (key1 < key2) {
+			diffs[n].key = key1;
+			diffs[n].ptr1 = ptr1;
+			diffs[n].ptr2 = NILFS_BMAP_INVALID_PTR;
+			next1 = true;
+		} else /* key1 > key2 */ {
+			diffs[n].key = key2;
+			diffs[n].ptr1 = NILFS_BMAP_INVALID_PTR;
+			diffs[n].ptr2 = ptr2;
+			next2 = true;
+		}
+
+		n++;
+		if (n == maxdiffs)
+			break;
+
+	lookup_next:
+		if (next1) {
+			ret = bmap1->b_ops->bop_find_next(bmap1, &key1,
+							  &ptr1, ctx1);
+			if (ret < 0) {
+				if (ret != -ENOENT) {
+					n = ret;
+					break;
+				}
+				done1 = true;
+			}
+			next1 = false;
+		}
+		if (next2) {
+			ret = bmap2->b_ops->bop_find_next(bmap2, &key2,
+							  &ptr2, ctx2);
+			if (ret < 0) {
+				if (ret != -ENOENT) {
+					n = ret;
+					break;
+				}
+				done2 = true;
+			}
+			next2 = false;
+		}
+	}
+out:
+	bmap2->b_ops->bop_find_close(bmap2, ctx2);
+	bmap1->b_ops->bop_find_close(bmap1, ctx1);
+	return n;
+}
+
+/**
+ * nilfs_bmap_compare - compare two bmaps and find their differences
+ * @bmap1: source bmap
+ * @bmap2: target bmap
+ * @start: start key
+ * @diffs: pointer to an array of nilfs_bmap_diff structures
+ * @maxdiffs: number of nilfs_bmap_diff structures
+ *
+ * Description: nilfs_bmap_compare() compares two versions of bmap and
+ * stores their differences in nilfs_bmap_diff structures given by
+ * @diffs and @maxdiffs.
+ *
+ * Return Value: On success, number of items stored to @diffs are
+ * returned.  On error, one of the following negative error codes are
+ * returned.
+ *
+ * %-EIO - I/O error.
+ *
+ * %-ENOMEM - Insufficient amount of memory available.
+ */
+ssize_t nilfs_bmap_compare(struct nilfs_bmap *bmap1, struct nilfs_bmap *bmap2,
+			   __u64 start, struct nilfs_bmap_diff *diffs,
+			   size_t maxdiffs)
+{
+	ssize_t ret;
+
+	if (maxdiffs == 0)
+		return 0;
+
+	/*
+	 * hold semaphore with smaller address first to avoid possible
+	 * deadlock problem.
+	 */
+	if (bmap1 < bmap2) {
+		down_read(&bmap1->b_sem);
+		down_read(&bmap2->b_sem);
+	} else {
+		down_read(&bmap2->b_sem);
+		down_read(&bmap1->b_sem);
+	}
+
+	ret = nilfs_bmap_do_compare(bmap1, bmap2, start, diffs, maxdiffs);
+
+	up_read(&bmap1->b_sem);
+	up_read(&bmap2->b_sem);
+	return ret;
+}
 
 /*
  * Internal use only

@@ -56,6 +56,18 @@ struct nilfs_bmap_stats {
 };
 
 /**
+ * struct nilfs_bmap_diff - array item to store bmap comparison result
+ * @key: key index
+ * @ptr: bmap pointer 1
+ * @ptr: bmap pointer 2
+ */
+struct nilfs_bmap_diff {
+	__u64 key;
+	__u64 ptr1;
+	__u64 ptr2;
+};
+
+/**
  * struct nilfs_bmap_operations - bmap operation table
  */
 struct nilfs_bmap_operations {
@@ -162,6 +174,9 @@ int nilfs_bmap_assign(struct nilfs_bmap *, struct buffer_head **,
 		      unsigned long, union nilfs_binfo *);
 int nilfs_bmap_lookup_at_level(struct nilfs_bmap *, __u64, int, __u64 *);
 int nilfs_bmap_mark(struct nilfs_bmap *, __u64, int);
+ssize_t nilfs_bmap_compare(struct nilfs_bmap *bmap1, struct nilfs_bmap *bmap2,
+			   __u64 start, struct nilfs_bmap_diff *diffs,
+			   size_t maxdiffs);
 
 void nilfs_bmap_init_gc(struct nilfs_bmap *);
 
