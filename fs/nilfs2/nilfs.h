@@ -272,6 +272,10 @@ extern int nilfs_mark_inode_dirty(struct inode *);
 extern void nilfs_dirty_inode(struct inode *, int flags);
 int nilfs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		 __u64 start, __u64 len);
+ssize_t nilfs_compare_inodes(struct super_block *sb, struct nilfs_root *root1,
+			     struct nilfs_root *root2, ino_t start,
+			     struct nilfs_inode_change *changes,
+			     size_t maxchanges);
 
 /* super.c */
 extern struct inode *nilfs_alloc_inode(struct super_block *);
@@ -296,6 +300,8 @@ int nilfs_resize_fs(struct super_block *sb, __u64 newsize);
 int nilfs_attach_checkpoint(struct super_block *sb, __u64 cno, int curr_mnt,
 			    struct nilfs_root **root);
 int nilfs_checkpoint_is_mounted(struct super_block *sb, __u64 cno);
+int nilfs_compare_fs(struct super_block *sb, __u64 cno1, __u64 cno2,
+		     struct nilfs_argv *argv, void *changes);
 
 /* gcinode.c */
 int nilfs_gccache_submit_read_data(struct inode *, sector_t, sector_t, __u64,

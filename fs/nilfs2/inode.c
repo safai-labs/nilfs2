@@ -1064,3 +1064,126 @@ int nilfs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	mutex_unlock(&inode->i_mutex);
 	return ret;
 }
+
+static void nilfs_scan_inode_changes(struct nilfs_ifile_change *ifc,
+				     struct nilfs_inode_change *ic,
+				     size_t offset)
+{
+	struct nilfs_inode *raw_inode1, *raw_inode2;
+	void *kaddr1, *kaddr2;
+	int i;
+
+	ic->ic_ino = ifc->ino;
+	ic->ic_flags = 0;
+	ic->ic_attr = 0;
+
+	if (!ifc->bh1) {
+		if (ifc->bh2)
+			ic->ic_flags = NILFS_IC_CREATE;
+	} else if (!ifc->bh2) {
+		ic->ic_flags = NILFS_IC_DELETE;
+	} else {
+		kaddr1 = kmap_atomic(ifc->bh1->b_page, KM_USER0);
+		raw_inode1 = kaddr1 + bh_offset(ifc->bh1) + offset;
+
+		kaddr2 = kmap_atomic(ifc->bh2->b_page, KM_USER1);
+		raw_inode2 = kaddr2 + bh_offset(ifc->bh2) + offset;
+
+		if (raw_inode1->i_links_count != raw_inode2->i_links_count)
+			ic->ic_flags |= NILFS_IC_LINKCOUNT;
+
+		for (i = 0; i < NILFS_INODE_BMAP_SIZE; i++) {
+			if (raw_inode1->i_bmap[i] != raw_inode2->i_bmap[i]) {
+				ic->ic_flags |= NILFS_IC_DATA;
+				break;
+			}
+		}
+
+		if (raw_inode1->i_flags != raw_inode2->i_flags)
+			ic->ic_flags |= NILFS_IC_FS_FLAGS;
+
+		if (raw_inode1->i_generation != raw_inode2->i_generation)
+			ic->ic_flags |= (NILFS_IC_GENERATION |
+					 NILFS_IC_DELETE | NILFS_IC_CREATE);
+#if 0
+		if (raw_inode1->i_xattr != raw_inode2->i_xattr)
+			ic->ic_flags |= NILFS_IC_XATTR;
+#endif
+		if (raw_inode1->i_mode != raw_inode2->i_mode)
+			ic->ic_attr |= ATTR_MODE;
+
+		if (raw_inode1->i_uid != raw_inode2->i_uid)
+			ic->ic_attr |= ATTR_UID;
+
+		if (raw_inode1->i_gid != raw_inode2->i_gid)
+			ic->ic_attr |= ATTR_GID;
+
+		if (raw_inode1->i_size != raw_inode2->i_size)
+			ic->ic_attr |= ATTR_SIZE;
+
+		if (raw_inode1->i_mtime_nsec != raw_inode2->i_mtime_nsec ||
+		    raw_inode1->i_mtime != raw_inode2->i_mtime)
+			ic->ic_attr |= ATTR_MTIME;
+
+		if (raw_inode1->i_ctime_nsec != raw_inode2->i_ctime_nsec ||
+		    raw_inode1->i_ctime != raw_inode2->i_ctime)
+			ic->ic_attr |= ATTR_CTIME;
+
+		kunmap_atomic(kaddr2, KM_USER1);
+		kunmap_atomic(kaddr1, KM_USER0);
+	}
+
+	brelse(ifc->bh1);
+	brelse(ifc->bh2);
+}
+
+/**
+ * nilfs_compare_inodes - lookup inode changes between two checkpoints
+ * @sb: super block instance
+ * @root1: root object of source checkpoint
+ * @root2: root object of target checkpoint
+ * @start: start inode number
+ * @changes: array of nilfs_inode_change structures to store results
+ * @maxchanges: maximum number of @changes array
+ */
+ssize_t nilfs_compare_inodes(struct super_block *sb, struct nilfs_root *root1,
+			     struct nilfs_root *root2, ino_t start,
+			     struct nilfs_inode_change *changes,
+			     size_t maxchanges)
+{
+	struct nilfs_ifile_change *ibuf;
+	unsigned ninodes_per_block;
+	size_t isz, maxifc, count, offset_bytes;
+	ssize_t i, nc = 0, n;
+
+	ibuf = (struct nilfs_ifile_change *)__get_free_pages(GFP_NOFS, 0);
+	if (unlikely(!ibuf))
+		return -ENOMEM;
+
+	maxifc = PAGE_SIZE / sizeof(*ibuf);
+	isz = NILFS_MDT(root1->ifile)->mi_entry_size;
+	ninodes_per_block = NILFS_MDT(root1->ifile)->mi_entries_per_block;
+
+	do {
+		count = min_t(size_t, maxchanges - nc, maxifc);
+		n = nilfs_ifile_compare(root1->ifile, root2->ifile, start,
+					ibuf, count);
+		if (n < 0) {
+			nc = n;
+			break;
+		}
+		if (n == 0)
+			break;
+		for (i = 0; i < n; i++, nc++) {
+			offset_bytes = (ibuf[i].ino % ninodes_per_block) * isz;
+
+			nilfs_scan_inode_changes(&ibuf[i], &changes[nc],
+						 offset_bytes);
+		}
+		start = ibuf[n - 1].ino + 1;
+
+	} while (n == count && nc < maxchanges);
+
+	free_pages((unsigned long)ibuf, 0);
+	return nc;
+}

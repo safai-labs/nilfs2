@@ -755,6 +755,63 @@ out:
 	return ret;
 }
 
+/**
+ * nilfs_ioctl_compare_checkpoints - look up changes between two checkpoints
+ * @inode: inode
+ * @argp: pointer to nilfs_comp_args structure
+ */
+static int nilfs_ioctl_compare_checkpoints(struct inode *inode,
+					   void __user *argp)
+{
+	struct nilfs_comp_args cmpargs;
+	void *kbuf;
+	void __user *base;
+	int ret;
+
+	ret = -EPERM;
+	if (!capable(CAP_SYS_ADMIN))
+		goto out;
+
+	ret = -EFAULT;
+	if (copy_from_user(&cmpargs, argp, sizeof(cmpargs)))
+		goto out;
+
+	ret = -EOPNOTSUPP;
+	if (cmpargs.argv.v_flags != NILFS_COMPARE_INODES)
+		goto out;
+
+	ret = -EINVAL;
+	if (cmpargs.argv.v_size != sizeof(struct nilfs_inode_change))
+		goto out;
+
+	ret = 0;
+	if (cmpargs.argv.v_nmembs == 0)
+		goto out;
+
+	base = (void __user *)(unsigned long)cmpargs.argv.v_base;
+	kbuf = vmalloc(cmpargs.argv.v_size * cmpargs.argv.v_nmembs);
+	if (!kbuf) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = nilfs_compare_fs(inode->i_sb, cmpargs.cno1, cmpargs.cno2,
+			       &cmpargs.argv, kbuf);
+
+	if (!ret && copy_to_user(base, kbuf,
+				 cmpargs.argv.v_nmembs * cmpargs.argv.v_size))
+			 /* v_nmembs has the number of acquired entries */
+		ret = -EFAULT;
+
+	vfree(kbuf);
+
+	if (!ret && copy_to_user(&((struct nilfs_comp_args *)argp)->argv,
+				 &cmpargs.argv, sizeof(cmpargs.argv)))
+		ret = -EFAULT;
+out:
+	return ret;
+}
+
 static int nilfs_ioctl_get_info(struct inode *inode, struct file *filp,
 				unsigned int cmd, void __user *argp,
 				size_t membsz,
@@ -824,6 +881,8 @@ long nilfs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		return nilfs_ioctl_resize(inode, filp, argp);
 	case NILFS_IOCTL_SET_ALLOC_RANGE:
 		return nilfs_ioctl_set_alloc_range(inode, argp);
+	case NILFS_IOCTL_COMPARE_CHECKPOINTS:
+		return nilfs_ioctl_compare_checkpoints(inode, argp);
 	default:
 		return -ENOTTY;
 	}

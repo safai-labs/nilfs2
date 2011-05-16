@@ -476,6 +476,55 @@ out:
 	return ret;
 }
 
+/**
+ * nilfs_compare_fs - lookup file system changes between two checkpoints
+ * @sb: super block instance
+ * @cno1: source checkpoint number
+ * @cno2: target checkpoint number
+ * @argv: nilfs_argv structure
+ * @changes: buffer to store array of nilfs_inode_change structures or so
+ */
+int nilfs_compare_fs(struct super_block *sb, __u64 cno1, __u64 cno2,
+		     struct nilfs_argv *argv, void *changes)
+{
+	struct nilfs_root *root1, *root2;
+	int ret;
+
+	if (cno1 == 0 || cno2 == 0 || cno1 > cno2)
+		return -EINVAL;
+
+	if (cno1 == cno2) {
+		argv->v_nmembs = 0;
+		return 0;
+	}
+
+	down_read(&sb->s_umount);
+
+	ret = nilfs_attach_checkpoint(sb, cno1, false, &root1);
+	if (ret < 0)
+		goto out_unlock;
+
+	ret = nilfs_attach_checkpoint(sb, cno2, false, &root2);
+	if (ret < 0) {
+		nilfs_put_root(root1);
+		goto out_unlock;
+	}
+
+	ret = nilfs_compare_inodes(sb, root1, root2, argv->v_index, changes,
+				   argv->v_nmembs);
+	if (ret >= 0) {
+		argv->v_nmembs = ret;
+		ret = 0;
+	}
+
+	nilfs_put_root(root2);
+	nilfs_put_root(root1);
+
+out_unlock:
+	up_read(&sb->s_umount);
+	return ret;
+}
+
 static void nilfs_put_super(struct super_block *sb)
 {
 	struct the_nilfs *nilfs = sb->s_fs_info;
