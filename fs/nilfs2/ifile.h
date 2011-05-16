@@ -32,6 +32,22 @@
 #include "alloc.h"
 
 
+/**
+ * struct nilfs_ifile_change - array item to store ifile comparison result
+ * @ino: inode number
+ * @bh1: pointers to buffer heads having source of changed disk inode
+ * @bh2: pointers to buffer heads having target of changed disk inode
+ *
+ * For new inodes, ptr array becomes @bh1 == NULL and @bh2 != NULL.
+ * For deleted inodes, ptr array becomes @bh1 != NULL and @bh2 == NULL.
+ * For modifed inodes, both @bh1 and @bh2 point to a valid item.
+ */
+struct nilfs_ifile_change {
+	ino_t ino;
+	struct buffer_head *bh1;
+	struct buffer_head *bh2;
+};
+
 static inline struct nilfs_inode *
 nilfs_ifile_map_inode(struct inode *ifile, ino_t ino, struct buffer_head *ibh)
 {
@@ -48,6 +64,10 @@ static inline void nilfs_ifile_unmap_inode(struct inode *ifile, ino_t ino,
 int nilfs_ifile_create_inode(struct inode *, ino_t *, struct buffer_head **);
 int nilfs_ifile_delete_inode(struct inode *, ino_t);
 int nilfs_ifile_get_inode_block(struct inode *, ino_t, struct buffer_head **);
+
+ssize_t nilfs_ifile_compare(struct inode *ifile1, struct inode *ifile2,
+			    ino_t start, struct nilfs_ifile_change *buf,
+			    size_t maxchanges);
 
 int nilfs_ifile_read(struct super_block *sb, struct nilfs_root *root,
 		     size_t inode_size, struct nilfs_inode *raw_inode,
