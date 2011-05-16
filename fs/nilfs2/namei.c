@@ -295,6 +295,9 @@ static int nilfs_do_unlink(struct inode *dir, struct dentry *dentry)
 	if (err)
 		goto out;
 
+	if (NILFS_I(inode)->i_parent_ino == dir->i_ino)
+		NILFS_I(inode)->i_parent_ino = 0;
+
 	inode->i_ctime = dir->i_ctime;
 	drop_nlink(inode);
 	err = 0;
@@ -414,6 +417,8 @@ static int nilfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		}
 	}
 
+	if (NILFS_I(old_inode)->i_parent_ino == old_dir->i_ino)
+		NILFS_I(old_inode)->i_parent_ino = new_dir->i_ino;
 	/*
 	 * Like most other Unix systems, set the ctime for inodes on a
 	 * rename.

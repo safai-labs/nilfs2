@@ -338,6 +338,7 @@ struct inode *nilfs_new_inode(struct inode *dir, int mode)
 	/* ii->i_file_acl = 0; */
 	/* ii->i_dir_acl = 0; */
 	ii->i_dir_start_lookup = 0;
+	ii->i_parent_ino = dir->i_ino;
 	nilfs_set_inode_flags(inode);
 	spin_lock(&nilfs->ns_next_gen_lock);
 	inode->i_generation = nilfs->ns_next_generation++;
@@ -415,6 +416,8 @@ int nilfs_read_inode_common(struct inode *inode,
 		0 : le32_to_cpu(raw_inode->i_dir_acl);
 #endif
 	ii->i_dir_start_lookup = 0;
+	ii->i_parent_ino = le32_to_cpu(raw_inode->i_parent_ino);
+
 	inode->i_generation = le32_to_cpu(raw_inode->i_generation);
 
 	if (S_ISREG(inode->i_mode) || S_ISDIR(inode->i_mode) ||
@@ -580,6 +583,7 @@ struct inode *nilfs_iget_for_gc(struct super_block *sb, unsigned long ino,
 void nilfs_write_inode_common(struct inode *inode,
 			      struct nilfs_inode *raw_inode, int has_bmap)
 {
+	struct the_nilfs *nilfs = inode->i_sb->s_fs_info;
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 
 	raw_inode->i_mode = cpu_to_le16(inode->i_mode);
@@ -595,13 +599,11 @@ void nilfs_write_inode_common(struct inode *inode,
 
 	raw_inode->i_flags = cpu_to_le32(ii->i_flags);
 	raw_inode->i_generation = cpu_to_le32(inode->i_generation);
+	raw_inode->i_parent_ino = cpu_to_le32(ii->i_parent_ino);
 
 	if (NILFS_ROOT_METADATA_FILE(inode->i_ino)) {
-		struct the_nilfs *nilfs = inode->i_sb->s_fs_info;
-
 		/* zero-fill unused portion in the case of super root block */
 		raw_inode->i_xattr = 0;
-		raw_inode->i_pad = 0;
 		memset((void *)raw_inode + sizeof(*raw_inode), 0,
 		       nilfs->ns_inode_size - sizeof(*raw_inode));
 	}
