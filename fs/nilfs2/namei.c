@@ -450,6 +450,98 @@ out:
 	return err;
 }
 
+/**
+ * nilfs_search_path - lookup path of inode in a past checkpoint tree
+ * @sb: super block instance
+ * @root: root object
+ * @ino: inode number
+ * @parent_index: parent index number
+ * @buf: buffer in which a pathname to be stored
+ * @bufsz: size of @buf
+ * @namesz: buffer to store size of the acquired pathname
+ */
+ssize_t nilfs_search_path(struct super_block *sb, struct nilfs_root *root,
+			  ino_t ino, int parent_index,
+			  char *buf, size_t bufsz, size_t *namesz)
+{
+	struct inode *inode, *parent;
+	struct nilfs_dir_entry *de;
+	struct page *page;
+	ssize_t ret;
+	size_t namelen;
+	char *cp;
+
+	inode = nilfs_iget(sb, root, ino);
+	if (IS_ERR(inode)) {
+		ret = PTR_ERR(inode);
+		if (ret == -EINVAL)
+			ret = -ENOENT;
+		goto out;
+	}
+
+	cp = buf + bufsz - 1;
+	if (cp - 1 < buf) {
+		/* at least the root directory needs one more character */
+		ret = -ENAMETOOLONG;
+		goto out_iput;
+	}
+	*cp = '\0'; /* end of a pathname */
+	ret = 1;
+
+	if (inode->i_ino == NILFS_ROOT_INO) {
+		*--cp = '/';
+		goto out_iput;
+	}
+
+	do {
+		if (!NILFS_I(inode)->i_parent_ino) {
+			ret = -ENOENT;
+			break;
+		}
+
+		parent = nilfs_iget(sb, root,
+				    NILFS_I(inode)->i_parent_ino);
+		if (IS_ERR(parent)) {
+			ret = PTR_ERR(parent);
+			if (ret == -EINVAL)
+				ret = -ENOENT;
+			break;
+		}
+
+		de = nilfs_find_entry_by_ino(parent, inode->i_ino, &page);
+		if (!de) {
+			iput(parent);
+			ret = -ENOENT;
+			break;
+		}
+
+		namelen = de->name_len;
+		if (cp - (namelen + 1) < buf) {
+			kunmap(page);
+			page_cache_release(page);
+			iput(parent);
+			ret = -ENAMETOOLONG;
+			break;
+		}
+		cp -= namelen;
+		memcpy(cp, de->name, namelen);
+		*--cp = '/';
+		kunmap(page);
+		page_cache_release(page);
+
+		iput(inode);
+		inode = parent;
+
+	} while (inode->i_ino != NILFS_ROOT_INO);
+
+out_iput:
+	iput(inode);
+	if (ret >= 0)
+		*namesz = buf + bufsz - cp;
+out:
+	return ret;
+}
+
 /*
  * Export operations
  */

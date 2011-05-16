@@ -237,6 +237,11 @@ extern struct nilfs_dir_entry *nilfs_dotdot(struct inode *, struct page **);
 extern void nilfs_set_link(struct inode *, struct nilfs_dir_entry *,
 			   struct page *, struct inode *);
 
+/* namei.c */
+ssize_t nilfs_search_path(struct super_block *sb, struct nilfs_root *root,
+			  ino_t ino, int parent_index,
+			  char *buf, size_t bufsz, size_t *namesz);
+
 /* file.c */
 extern int nilfs_sync_file(struct file *, loff_t, loff_t, int);
 
