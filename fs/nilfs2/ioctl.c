@@ -20,7 +20,9 @@
  * Written by Koji Sato <koji@osrg.net>.
  */
 
+#include <linux/file.h>		/* fget(), fput() */
 #include <linux/fs.h>
+#include <linux/fsnotify.h>	/* fsnotify_create() */
 #include <linux/wait.h>
 #include <linux/slab.h>
 #include <linux/capability.h>	/* capable() */
@@ -28,6 +30,7 @@
 #include <linux/vmalloc.h>
 #include <linux/compat.h>	/* compat_ptr() */
 #include <linux/mount.h>	/* mnt_want_write(), mnt_drop_write() */
+#include <linux/namei.h>
 #include <linux/buffer_head.h>
 #include <linux/nilfs2_fs.h>
 #include "nilfs.h"
@@ -676,6 +679,103 @@ out:
 	return ret;
 }
 
+static inline int nilfs_may_create(struct inode *dir, struct dentry *child)
+{
+	if (child->d_inode)
+		return -EEXIST;
+	if (IS_DEADDIR(dir))
+		return -ENOENT;
+	return inode_permission(dir, MAY_WRITE | MAY_EXEC);
+}
+
+static int nilfs_ioctl_revert(struct inode *dir, struct file *filp,
+			      unsigned int cmd, void __user *argp)
+{
+	struct file *filp2;
+	struct dentry *new_dentry;
+	struct nameidata nd;
+	struct inode *orig_inode;
+	struct nilfs_root *orig_root;
+	__u32 fd;
+	int ret;
+
+	ret = -EBADF;
+	if (!S_ISDIR(dir->i_mode))
+		goto out;
+
+	ret = mnt_want_write(filp->f_path.mnt);
+	if (ret)
+		goto out;
+
+	ret = -EFAULT;
+	if (copy_from_user(&fd, argp, sizeof(fd)))
+		goto out_drop_write;
+
+	ret = -EBADF;
+	filp2 = fget(fd);
+	if (!filp2)
+		goto out_drop_write;
+
+	if (filp2->f_path.dentry) {
+		orig_inode = filp2->f_path.dentry->d_inode;
+	} else {
+		printk(KERN_ERR "cannot get valid inode\n");
+		goto out_fput;
+	}
+
+	ret = -EXDEV;
+	if (orig_inode->i_sb->s_type != &nilfs_fs_type)
+		goto out_fput;
+
+	orig_root = NILFS_I(orig_inode)->i_root;
+	if (!orig_root || orig_root->cno == NILFS_CPTREE_CURRENT_CNO)
+		goto out_fput;
+
+	ret = -EPERM;
+	if (!S_ISREG(orig_inode->i_mode))
+		goto out_fput;
+
+	ret = inode_permission(orig_inode, MAY_READ);
+	if (ret)
+		goto out_fput;
+
+	ret = kern_path_parent("/test/test.img", &nd);
+	if (ret)
+		goto out_fput;
+
+	new_dentry = lookup_create(&nd, 0);
+	if (IS_ERR(new_dentry)) {
+		ret = PTR_ERR(new_dentry);
+		goto out_unlock;
+	}
+
+	ret = -EXDEV;
+	if (new_dentry->d_sb != orig_inode->i_sb)
+		goto out_dput;
+
+	ret = nilfs_may_create(dir, new_dentry);
+	if (ret)
+		goto out_dput;
+
+
+	ret = nilfs_undelete(dir, new_dentry, orig_inode);
+	if (!ret)
+		fsnotify_create(dir, new_dentry);
+
+out_dput:
+	dput(new_dentry);
+out_unlock:
+	mutex_unlock(&nd.path.dentry->d_inode->i_mutex);
+/* out_release: */
+	path_put(&nd.path);
+out_fput:
+	fput(filp2);
+out_drop_write:
+	mnt_drop_write(filp->f_path.mnt);
+out:
+	return ret;
+}
+
 static int nilfs_ioctl_sync(struct inode *inode, struct file *filp,
 			    unsigned int cmd, void __user *argp)
 {
@@ -818,6 +918,8 @@ long nilfs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		return nilfs_ioctl_get_bdescs(inode, filp, cmd, argp);
 	case NILFS_IOCTL_CLEAN_SEGMENTS:
 		return nilfs_ioctl_clean_segments(inode, filp, cmd, argp);
+	case NILFS_IOCTL_REVERT:
+		return nilfs_ioctl_revert(inode, filp, cmd, argp);
 	case NILFS_IOCTL_SYNC:
 		return nilfs_ioctl_sync(inode, filp, cmd, argp);
 	case NILFS_IOCTL_RESIZE:
