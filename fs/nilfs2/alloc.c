@@ -184,6 +184,18 @@ nilfs_palloc_entry_blkoff(const struct inode *inode, __u64 nr)
 }
 
 /**
+ * nilfs_palloc_entry_offset - get offset of the entry in the block
+ * @inode: inode of metadata file using this allocator
+ * @nr: serial number of the entry
+ */
+unsigned long nilfs_palloc_entry_offset(const struct inode *inode, __u64 nr)
+{
+	__u64 t = nr;
+
+	return do_div(t, NILFS_MDT(inode)->mi_entries_per_block);
+}
+
+/**
  * nilfs_palloc_desc_block_init - initialize buffer of a group descriptor block
  * @inode: inode of metadata file
  * @bh: buffer head of the buffer to be initialized

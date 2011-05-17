@@ -47,6 +47,7 @@ int nilfs_palloc_get_entry_block(struct inode *, __u64, int,
 				 struct buffer_head **);
 void *nilfs_palloc_block_get_entry(const struct inode *, __u64,
 				   const struct buffer_head *, void *);
+unsigned long nilfs_palloc_entry_offset(const struct inode *inode, __u64 nr);
 
 /**
  * nilfs_palloc_req - persistent allocator request and reply
