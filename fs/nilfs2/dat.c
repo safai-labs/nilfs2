@@ -464,6 +464,73 @@ ssize_t nilfs_dat_get_vinfo(struct inode *dat, void *buf, unsigned visz,
 }
 
 /**
+ * nilfs_dat_revive - revive terminated virtual block addresses
+ * @dat: DAT file inode
+ * @vblocknrs: vector of virtual block numbers to be revived (disk byte order)
+ * @nitems: number of elements stored in @vblocknrs
+ */
+int nilfs_dat_revive(struct inode *dat, __le64 *vblocknrs, size_t nitems)
+{
+	struct buffer_head *entry_bh;
+	struct nilfs_dat_entry *entry;
+	__le64 *vblocknrp;
+	__u64 vblocknr, first_nr_in_block;
+	size_t offset, nentries_per_block, entry_size;
+	void *kaddr;
+	int ret;
+
+	if (nitems == 0)
+		return 0;
+	nentries_per_block = NILFS_MDT(dat)->mi_entries_per_block;
+	entry_size = NILFS_MDT(dat)->mi_entry_size;
+	vblocknrp = vblocknrs;
+	vblocknr = le64_to_cpu(*vblocknrp);
+
+	while (1) {
+		ret = nilfs_palloc_get_entry_block(dat, vblocknr, 0, &entry_bh);
+		if (ret < 0)
+			goto out;
+
+		offset = nilfs_palloc_entry_offset(dat, vblocknr);
+		first_nr_in_block = vblocknr - offset;
+
+		kaddr = kmap_atomic(entry_bh->b_page, KM_USER0);
+		do {
+			entry = kaddr + bh_offset(entry_bh) + offset *
+				entry_size;
+
+			if (unlikely(le64_to_cpu(entry->de_end) ==
+				     NILFS_CNO_MAX)) {
+				/* the virtual block number is alive */
+				ret = -EEXIST;
+				goto out_unmap;
+			}
+			entry->de_end = cpu_to_le64(NILFS_CNO_MAX);
+			vblocknrp++;
+			if (vblocknrp == vblocknrs + nitems) {
+				ret = 0;
+				goto out_unmap;
+			}
+
+			vblocknr = le64_to_cpu(*vblocknrp);
+			offset = vblocknr - first_nr_in_block;
+		} while (vblocknr >= first_nr_in_block &&
+			 offset < nentries_per_block);
+
+		kunmap_atomic(kaddr, KM_USER0);
+		mark_buffer_dirty(entry_bh);
+		brelse(entry_bh);
+	}
+out_unmap:
+	kunmap_atomic(kaddr, KM_USER0);
+	mark_buffer_dirty(entry_bh);
+	brelse(entry_bh);
+out:
+	nilfs_mdt_mark_dirty(dat);
+	return ret;
+}
+
+/**
  * nilfs_dat_read - read or get dat inode
  * @sb: super block instance
  * @entry_size: size of a dat entry

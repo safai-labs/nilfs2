@@ -52,6 +52,7 @@ int nilfs_dat_mark_dirty(struct inode *, __u64);
 int nilfs_dat_freev(struct inode *, __u64 *, size_t);
 int nilfs_dat_move(struct inode *, __u64, sector_t);
 ssize_t nilfs_dat_get_vinfo(struct inode *, void *, unsigned, size_t);
+int nilfs_dat_revive(struct inode *dat, __le64 *vblocknrs, size_t nitems);
 
 int nilfs_dat_read(struct super_block *sb, size_t entry_size,
 		   struct nilfs_inode *raw_inode, struct inode **inodep);
