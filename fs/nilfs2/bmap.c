@@ -302,6 +302,23 @@ void nilfs_bmap_clear(struct nilfs_bmap *bmap)
 }
 
 /**
+ * nilfs_bmap_revive - revive terminated virtual block numbers used in bmap
+ * @bmap: bmap
+ * @keyp: buffer to store key of the current position [in, out]
+ * @nreqs: number of virtual block entries requested
+ */
+ssize_t nilfs_bmap_revive(struct nilfs_bmap *bmap, __u64 *keyp, size_t nreqs)
+{
+	ssize_t ret;
+
+	down_write(&bmap->b_sem);
+	ret = bmap->b_ops->bop_revive(bmap, keyp, nreqs);
+	up_write(&bmap->b_sem);
+
+	return ret;
+}
+
+/**
  * nilfs_bmap_propagate - propagate dirty state
  * @bmap: bmap
  * @bh: buffer head

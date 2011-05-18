@@ -65,6 +65,8 @@ struct nilfs_bmap_operations {
 	int (*bop_insert)(struct nilfs_bmap *, __u64, __u64);
 	int (*bop_delete)(struct nilfs_bmap *, __u64);
 	void (*bop_clear)(struct nilfs_bmap *);
+	ssize_t (*bop_revive)(struct nilfs_bmap *bmap, __u64 *keyp,
+			      size_t nreqs);
 
 	int (*bop_propagate)(struct nilfs_bmap *, struct buffer_head *);
 	void (*bop_lookup_dirty_buffers)(struct nilfs_bmap *,
@@ -151,6 +153,7 @@ int nilfs_bmap_delete(struct nilfs_bmap *, unsigned long);
 int nilfs_bmap_last_key(struct nilfs_bmap *, unsigned long *);
 int nilfs_bmap_truncate(struct nilfs_bmap *, unsigned long);
 void nilfs_bmap_clear(struct nilfs_bmap *);
+ssize_t nilfs_bmap_revive(struct nilfs_bmap *bmap, __u64 *keyp, size_t nreqs);
 int nilfs_bmap_propagate(struct nilfs_bmap *, struct buffer_head *);
 void nilfs_bmap_lookup_dirty_buffers(struct nilfs_bmap *, struct list_head *);
 int nilfs_bmap_assign(struct nilfs_bmap *, struct buffer_head **,

@@ -250,6 +250,28 @@ int nilfs_direct_delete_and_convert(struct nilfs_bmap *bmap,
 	return 0;
 }
 
+ssize_t nilfs_direct_revive(struct nilfs_bmap *direct, __u64 *keyp,
+			    size_t nreqs)
+{
+	struct inode *dat;
+	__u64 key = *keyp;
+	size_t n;
+	int ret;
+
+	if (key > NILFS_DIRECT_KEY_MAX)
+		return 0;
+
+	n = min_t(size_t, nreqs, NILFS_DIRECT_KEY_MAX - key + 1);
+	dat = nilfs_bmap_get_dat(direct);
+
+	ret = nilfs_dat_revive(dat, nilfs_direct_dptrs(direct) + key, n);
+	if (!ret) {
+		*keyp = key + n;
+		ret = n;
+	}
+	return ret;
+}
+
 static int nilfs_direct_propagate(struct nilfs_bmap *bmap,
 				  struct buffer_head *bh)
 {
@@ -347,6 +369,7 @@ static const struct nilfs_bmap_operations nilfs_direct_ops = {
 	.bop_insert		=	nilfs_direct_insert,
 	.bop_delete		=	nilfs_direct_delete,
 	.bop_clear		=	NULL,
+	.bop_revive		=	nilfs_direct_revive,
 
 	.bop_propagate		=	nilfs_direct_propagate,
 

@@ -603,6 +603,39 @@ static int nilfs_btree_do_lookup_last(const struct nilfs_bmap *btree,
 	return 0;
 }
 
+static int nilfs_btree_descend_leftmost(struct nilfs_bmap *btree,
+					struct nilfs_btree_path *path,
+					int level, int index, int tolevel)
+{
+	struct nilfs_btree_node *node;
+	int ncmax;
+	__u64 ptr;
+	int ret;
+
+	node = nilfs_btree_get_node(btree, path, level, &ncmax);
+	ptr = nilfs_btree_node_get_ptr(node, index, ncmax);
+	path[level].bp_index = index;
+	ncmax = nilfs_btree_nchildren_per_block(btree);
+
+	/* decend the tree */
+	do {
+		level--;
+		ret = nilfs_btree_get_block(btree, ptr, &path[level].bp_bh);
+		if (ret < 0)
+			break;
+		node = nilfs_btree_get_nonroot_node(path, level);
+		if (nilfs_btree_bad_node(node, level)) {
+			ret = -EINVAL;
+			break;
+		}
+
+		ptr = nilfs_btree_node_get_ptr(node, 0, ncmax);
+		path[level].bp_index = 0;
+	} while (level > tolevel);
+
+	return ret;
+}
+
 static int nilfs_btree_lookup(const struct nilfs_bmap *btree,
 			      __u64 key, int level, __u64 *ptrp)
 {
@@ -1795,6 +1828,97 @@ int nilfs_btree_convert_and_insert(struct nilfs_bmap *btree,
 	return 0;
 }
 
+ssize_t nilfs_btree_revive(struct nilfs_bmap *btree, __u64 *keyp, size_t nreqs)
+{
+	struct nilfs_btree_path *path;
+	struct nilfs_btree_node *node;
+	struct inode *dat;
+	__u64 key = *keyp;
+	size_t n = 0;
+	int level, ncmax, index, nchildren;
+	ssize_t ret;
+
+	path = nilfs_btree_alloc_path();
+	if (path == NULL)
+		return -ENOMEM;
+
+	level = NILFS_BTREE_LEVEL_NODE_MIN;
+	dat = nilfs_bmap_get_dat(btree);
+	ret = nilfs_btree_do_lookup(btree, path, key, NULL, level, 1);
+	if (ret < 0) {
+		if (ret != -ENOENT)
+			goto out;
+	}
+
+repeat:
+	index = path[level].bp_index;
+	node = nilfs_btree_get_node(btree, path, level, &ncmax);
+	nchildren = nilfs_btree_node_get_nchildren(node);
+	if (index < nchildren) {
+		size_t c = min_t(size_t, nreqs - n, nchildren - index);
+
+		ret = nilfs_dat_revive(
+			dat, nilfs_btree_node_dptrs(node, ncmax) + index, c);
+		if (ret < 0)
+			goto out;
+		n += c;
+		index += c;
+		if (index < nchildren) {
+			key = nilfs_btree_node_get_key(node, index);
+			/* break reviving */
+			ret = n;
+			goto out;
+		}
+		key = nilfs_btree_node_get_key(node, index - 1) + 1;
+	}
+
+	/* ascend the tree */
+	while (1) {
+		if (level == nilfs_btree_height(btree) - 1) {
+			/* root node */
+			ret = n;
+			goto out;
+		}
+		brelse(path[level].bp_bh);
+		path[level].bp_bh = NULL;
+
+		level++;
+		node = nilfs_btree_get_node(btree, path, level, &ncmax);
+		nchildren = nilfs_btree_node_get_nchildren(node);
+		index = path[level].bp_index + 1;
+		if (index < nchildren)
+			break; /* we have unprocessed child nodes */
+		if (!n)
+			continue;
+
+		ret = nilfs_dat_revive(
+			dat, nilfs_btree_node_dptrs(node, ncmax), nchildren);
+		if (ret < 0)
+			goto out;
+
+		n += nchildren;
+	}
+
+	key = nilfs_btree_node_get_key(node, index);
+	if (n >= nreqs) {
+		ret = n;
+		goto out;
+	}
+
+	/* decend the tree and continue */
+	ret = nilfs_btree_descend_leftmost(btree, path, level, index,
+					   NILFS_BTREE_LEVEL_NODE_MIN);
+	if (!ret) {
+		level = NILFS_BTREE_LEVEL_NODE_MIN;
+		goto repeat;
+	}
+out:
+	nilfs_btree_free_path(path);
+	if (ret >= 0)
+		*keyp = key;
+	return ret;
+}
+
 static int nilfs_btree_propagate_p(struct nilfs_bmap *btree,
 				   struct nilfs_btree_path *path,
 				   int level,
@@ -2260,6 +2384,7 @@ static const struct nilfs_bmap_operations nilfs_btree_ops = {
 	.bop_insert		=	nilfs_btree_insert,
 	.bop_delete		=	nilfs_btree_delete,
 	.bop_clear		=	NULL,
+	.bop_revive		=	nilfs_btree_revive,
 
 	.bop_propagate		=	nilfs_btree_propagate,
 
@@ -2280,6 +2405,7 @@ static const struct nilfs_bmap_operations nilfs_btree_ops_gc = {
 	.bop_insert		=	NULL,
 	.bop_delete		=	NULL,
 	.bop_clear		=	NULL,
+	.bop_revive		=	NULL,
 
 	.bop_propagate		=	nilfs_btree_propagate_gc,
 
