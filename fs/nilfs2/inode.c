@@ -41,6 +41,10 @@ struct nilfs_iget_args {
 	int for_gc;
 };
 
+static int __nilfs_read_inode(struct super_block *sb,
+			      struct nilfs_root *root, unsigned long ino,
+			      struct inode *inode);
+
 void nilfs_inode_add_blocks(struct inode *inode, int n)
 {
 	struct nilfs_root *root = NILFS_I(inode)->i_root;
@@ -365,6 +369,101 @@ struct inode *nilfs_new_inode(struct inode *dir, int mode)
 			 called */
  failed:
 	return ERR_PTR(err);
+}
+
+#define NILFS_MAX_REVIVE_BLOCKS	16384  /* 64MB for 4KB block */
+
+static int nilfs_revive_bmap(struct inode *inode)
+{
+	struct nilfs_inode_info *ii = NILFS_I(inode);
+	__u64 blkoff = 0;
+	int retry = false;
+	ssize_t ret;
+
+	if (!test_bit(NILFS_I_BMAP, &ii->i_state))
+		return 0;
+
+	while (1) {
+		ret = nilfs_bmap_revive(ii->i_bmap, &blkoff,
+					NILFS_MAX_REVIVE_BLOCKS);
+		if (!ret)
+			break;
+		if (ret < 0) {
+			if (retry || ret != -ENOMEM) {
+				nilfs_warning(inode->i_sb, __func__,
+					      "failed to revive bmap (ino=%lu,"
+					      " err=%zd)", inode->i_ino, ret);
+				break;
+			}
+			retry = true;
+		} else {
+			retry = false;
+		}
+
+		nilfs_relax_pressure_in_lock(inode->i_sb);
+	}
+	return ret;
+}
+
+/**
+ * nilfs_undelete_inode - undelete inode in past checkpoint
+ * @dir: inode of parent directory to put undeleted inode
+ * @orig: inode to be undeleted
+ */
+struct inode *nilfs_undelete_inode(struct inode *dir, struct inode *orig)
+{
+	struct nilfs_root *droot, *sroot;
+	struct inode *inode;
+	struct nilfs_inode_info *ii;
+	ino_t dino;
+	int ret = -EINVAL;
+
+	if (S_ISDIR(orig->i_mode))
+		goto failed; /* directory is unsupported */
+
+	inode = new_inode(dir->i_sb);
+
+	mapping_set_gfp_mask(inode->i_mapping,
+			     mapping_gfp_mask(inode->i_mapping) & ~__GFP_FS);
+
+	droot = NILFS_I(dir)->i_root;
+	ii = NILFS_I(inode);
+	ii->i_state = 1 << NILFS_I_NEW;
+	ii->i_root = droot;
+
+	ret = nilfs_ifile_create_inode(droot->ifile, &dino, &ii->i_bh);
+	if (ret)
+		goto bad_inode;
+
+	sroot = NILFS_I(orig)->i_root;
+
+	ret = nilfs_revive_bmap(orig);
+	if (ret)
+		goto bad_inode;
+
+	inode->i_ino = dino;
+	atomic_inc(&droot->inodes_count);
+
+	ret = __nilfs_read_inode(dir->i_sb, sroot, orig->i_ino, inode);
+	if (ret)
+		goto failed_iput;
+
+	atomic_add(inode->i_blocks, &droot->blocks_count);
+	insert_inode_hash(inode);
+	return inode;
+
+failed_iput:
+	inode->i_nlink = 0;
+	iput(inode);  /* raw_inode will be deleted through
+			 generic_delete_inode() */
+	goto failed;
+
+bad_inode:
+	make_bad_inode(inode);
+	iput(inode);  /* if i_nlink == 1, generic_forget_inode() will be
+			 called */
+failed:
+	return ERR_PTR(ret);
 }
 
 void nilfs_set_inode_flags(struct inode *inode)
