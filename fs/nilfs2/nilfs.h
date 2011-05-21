@@ -222,6 +222,10 @@ static inline __u32 nilfs_mask_flags(umode_t mode, __u32 flags)
 		return flags & (FS_NODUMP_FL | FS_NOATIME_FL);
 }
 
+/* namei.c */
+int nilfs_undelete(struct inode *dir, struct dentry *dentry,
+		   struct inode *orig);
+
 /* dir.c */
 extern int nilfs_add_link(struct dentry *, struct inode *);
 extern ino_t nilfs_inode_by_name(struct inode *, const struct qstr *);

@@ -111,6 +111,31 @@ static int nilfs_create(struct inode *dir, struct dentry *dentry, int mode,
 	return err;
 }
 
+int nilfs_undelete(struct inode *dir, struct dentry *dentry,
+		   struct inode *orig)
+{
+	struct inode *inode;
+	struct nilfs_transaction_info ti;
+	int err;
+
+	err = nilfs_transaction_begin(dir->i_sb, &ti, 1);
+	if (err)
+		return err;
+
+	inode = nilfs_undelete_inode(dir, orig);
+	err = PTR_ERR(inode);
+	if (!IS_ERR(inode)) {
+		nilfs_mark_inode_dirty(inode);
+		err = nilfs_add_nondir(dentry, inode);
+	}
+	if (!err)
+		err = nilfs_transaction_commit(dir->i_sb);
+	else
+		nilfs_transaction_abort(dir->i_sb);
+
+	return err;
+}
+
 static int
 nilfs_mknod(struct inode *dir, struct dentry *dentry, int mode, dev_t rdev)
 {
