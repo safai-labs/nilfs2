@@ -172,8 +172,7 @@ nilfs_palloc_group_desc_add_entries(struct inode *inode,
  * @inode: inode of metadata file using this allocator
  * @nr: serial number of the entry (e.g. inode number)
  */
-static unsigned long
-nilfs_palloc_entry_blkoff(const struct inode *inode, __u64 nr)
+unsigned long nilfs_palloc_entry_blkoff(const struct inode *inode, __u64 nr)
 {
 	unsigned long group, group_offset;
 
@@ -328,6 +327,38 @@ void *nilfs_palloc_block_get_entry(const struct inode *inode, __u64 nr,
 
 	return kaddr + bh_offset(bh) +
 		entry_offset * NILFS_MDT(inode)->mi_entry_size;
+}
+
+/**
+ * nilfs_palloc_block_type - classify type of a block
+ * @inode: inode of metadata file using this allocator
+ * @blkoff: offset of the block to be classified (in block)
+ * @entrynr: first entry number in the block [out]
+ */
+int nilfs_palloc_block_type(const struct inode *inode, __u64 blkoff,
+			    __u64 *entrynr)
+{
+	struct nilfs_mdt_info *mi = NILFS_MDT(inode);
+	__u64 ngroups1 = blkoff;
+	unsigned long offset1, offset2, ngroups2;
+	int ret;
+
+	offset1 = do_div(ngroups1, mi->mi_blocks_per_desc_block);
+	if (offset1 == 0) {
+		ret = NILFS_PALLOC_DESC_BLOCK;
+	} else {
+		ngroups2 = (offset1 - 1) / mi->mi_blocks_per_group;
+		offset2 = (offset1 - 1) % mi->mi_blocks_per_group;
+		if (offset2 == 0) {
+			ret = NILFS_PALLOC_BITMAP_BLOCK;
+		} else {
+			ret = NILFS_PALLOC_ENTRY_BLOCK;
+			*entrynr = (ngroups1 + ngroups2) *
+				nilfs_palloc_entries_per_group(inode) +
+				mi->mi_entries_per_block * (offset2 - 1);
+		}
+	}
+	return ret;
 }
 
 /**

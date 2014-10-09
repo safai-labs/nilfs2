@@ -43,10 +43,20 @@ nilfs_palloc_entries_per_group(const struct inode *inode)
 }
 
 int nilfs_palloc_init_blockgroup(struct inode *, unsigned);
+unsigned long nilfs_palloc_entry_blkoff(const struct inode *inode, __u64 nr);
 int nilfs_palloc_get_entry_block(struct inode *, __u64, int,
 				 struct buffer_head **);
 void *nilfs_palloc_block_get_entry(const struct inode *, __u64,
 				   const struct buffer_head *, void *);
+int nilfs_palloc_block_type(const struct inode *inode, __u64 blkoff,
+			    __u64 *entrynr);
+
+/* block types */
+enum {
+	NILFS_PALLOC_DESC_BLOCK,	/* descriptor block */
+	NILFS_PALLOC_BITMAP_BLOCK,	/* bitmap block */
+	NILFS_PALLOC_ENTRY_BLOCK,	/* entry block */
+};
 
 int nilfs_palloc_count_max_entries(struct inode *, u64, u64 *);
 
