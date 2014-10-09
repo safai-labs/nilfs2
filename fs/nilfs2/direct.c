@@ -60,6 +60,31 @@ static int nilfs_direct_lookup(const struct nilfs_bmap *direct,
 	return 0;
 }
 
+/**
+ * nilfs_direct_lookup_next - get next key and pointer
+ * @direct: bmap object
+ * @keyp: pointer to the current key [in, out]
+ * @ptrp: buffer to store resultant pointer [out]
+ */
+static int nilfs_direct_lookup_next(struct nilfs_bmap *direct, __u64 *keyp,
+				    __u64 *ptrp)
+{
+	__u64 key;
+	__u64 ptr;
+	int ret = -ENOENT; /* internal code */
+
+	for (key = *keyp + 1; key <= NILFS_DIRECT_KEY_MAX; key++) {
+		ptr = nilfs_direct_get_ptr(direct, key);
+		if (ptr != NILFS_BMAP_INVALID_PTR) {
+			*keyp = key;
+			*ptrp = ptr;
+			ret = 0;
+			break;
+		}
+	}
+	return ret;
+}
+
 static int nilfs_direct_lookup_contig(const struct nilfs_bmap *direct,
 				      __u64 key, __u64 *ptrp,
 				      unsigned maxblocks)
@@ -341,6 +366,27 @@ static int nilfs_direct_assign(struct nilfs_bmap *bmap,
 		nilfs_direct_assign_p(bmap, key, ptr, bh, blocknr, binfo);
 }
 
+static int nilfs_direct_find(struct nilfs_bmap *direct, __u64 *keyp,
+			     __u64 *ptrp, void **context)
+{
+	int ret;
+	*context = NULL;
+	ret = nilfs_direct_lookup(direct, *keyp, 1, ptrp);
+	if (ret == -ENOENT)
+		ret = nilfs_direct_lookup_next(direct, keyp, ptrp);
+	return  ret;
+}
+
+static int nilfs_direct_find_next(struct nilfs_bmap *direct, __u64 *keyp,
+				  __u64 *ptrp, void *context)
+{
+	return nilfs_direct_lookup_next(direct, keyp, ptrp);
+}
+
+static void nilfs_direct_find_close(struct nilfs_bmap *direct, void *context)
+{
+}
+
 static const struct nilfs_bmap_operations nilfs_direct_ops = {
 	.bop_lookup		=	nilfs_direct_lookup,
 	.bop_lookup_contig	=	nilfs_direct_lookup_contig,
@@ -359,6 +405,9 @@ static const struct nilfs_bmap_operations nilfs_direct_ops = {
 	.bop_check_insert	=	nilfs_direct_check_insert,
 	.bop_check_delete	=	NULL,
 	.bop_gather_data	=	nilfs_direct_gather_data,
+	.bop_find		=	nilfs_direct_find,
+	.bop_find_next		=	nilfs_direct_find_next,
+	.bop_find_close		=	nilfs_direct_find_close,
 };
 
 

@@ -603,6 +603,88 @@ static int nilfs_btree_do_lookup_last(const struct nilfs_bmap *btree,
 	return 0;
 }
 
+/**
+ * nilfs_btree_do_lookup_next - look up next key and pointer
+ * @btree: bmap object
+ * @path: btree lookup path
+ * @keyp: pointer to the key [in, out]
+ * @ptrp: buffer to store resultant pointer [out]
+ */
+static int nilfs_btree_do_lookup_next(struct nilfs_bmap *btree,
+				      struct nilfs_btree_path *path,
+				      __u64 *keyp, __u64 *ptrp)
+{
+	struct nilfs_btree_node *node;
+	__u64 key;
+	__u64 ptr;
+	int level, index, ncmax;
+	int ret;
+
+	level = NILFS_BTREE_LEVEL_NODE_MIN;
+	node = nilfs_btree_get_node(btree, path, level, &ncmax);
+	index = path[level].bp_index;
+	if (index < nilfs_btree_node_get_nchildren(node)) {
+		key = nilfs_btree_node_get_key(node, index);
+		if (key > *keyp) {
+			/*
+			 * The previous lookup did not hit, and we
+			 * already point to a valid next item.
+			 */
+			ptr = nilfs_btree_node_get_ptr(node, index, ncmax);
+			goto out;
+		}
+		/* The previous lookup hit */
+		index++;
+		if (index < nilfs_btree_node_get_nchildren(node)) {
+			path[level].bp_index = index;
+			key = nilfs_btree_node_get_key(node, index);
+			ptr = nilfs_btree_node_get_ptr(node, index, ncmax);
+			goto out;
+		}
+	}
+	/*
+	 * The previous lookup did not hit, and the node was over.
+	 * Try to find a next valid node.
+	 */
+
+	/* ascend the tree */
+	do {
+		if (level == nilfs_btree_height(btree) - 1)
+			return -ENOENT; /* We are now at the root node */
+
+		brelse(path[level].bp_bh);
+		path[level].bp_bh = NULL;
+
+		level++;
+		node = nilfs_btree_get_node(btree, path, level, &ncmax);
+		index = path[level].bp_index + 1;
+	} while (index >= nilfs_btree_node_get_nchildren(node));
+
+	ptr = nilfs_btree_node_get_ptr(node, index, ncmax);
+	path[level].bp_index = index;
+
+	/* descend the tree */
+	ncmax = nilfs_btree_nchildren_per_block(btree);
+	do {
+		level--;
+		ret = nilfs_btree_get_block(btree, ptr, &path[level].bp_bh);
+		if (ret < 0)
+			return ret;
+		node = nilfs_btree_get_nonroot_node(path, level);
+		if (nilfs_btree_bad_node(node, level))
+			return -EINVAL;
+
+		ptr = nilfs_btree_node_get_ptr(node, 0, ncmax);
+		path[level].bp_index = 0;
+	} while (level > NILFS_BTREE_LEVEL_NODE_MIN);
+
+	key = nilfs_btree_node_get_key(node, 0);
+out:
+	*keyp = key;
+	*ptrp = ptr;
+	return 0;
+}
+
 static int nilfs_btree_lookup(const struct nilfs_bmap *btree,
 			      __u64 key, int level, __u64 *ptrp)
 {
@@ -2254,6 +2336,52 @@ static int nilfs_btree_mark(struct nilfs_bmap *btree, __u64 key, int level)
 	return ret;
 }
 
+/**
+ * nilfs_btree_find - find the next key and pointer
+ * @btree: bmap object
+ * @keyp: pointer to the key
+ * @ptrp: buffer to store resultant pointer
+ * @context: buffer to store search context (btree path)
+ */
+static int nilfs_btree_find(struct nilfs_bmap *btree, __u64 *keyp,
+			    __u64 *ptrp, void **context)
+{
+	struct nilfs_btree_path *path;
+	int level = NILFS_BTREE_LEVEL_NODE_MIN;
+	int ret;
+
+	path = nilfs_btree_alloc_path();
+	if (!path)
+		return -ENOMEM;
+
+	ret = nilfs_btree_do_lookup(btree, path, *keyp, ptrp, level, 1);
+	if (ret < 0) {
+		if (ret != -ENOENT)
+			goto failed;
+		/* did not hit a valid item at key -- look up next key */
+		ret = nilfs_btree_do_lookup_next(btree, path, keyp, ptrp);
+		if (ret < 0)
+			goto failed;
+	}
+	*context = path;
+	return 0;
+failed:
+	nilfs_btree_free_path(path);
+	return ret;
+}
+
+static int nilfs_btree_find_next(struct nilfs_bmap *btree, __u64 *keyp,
+				 __u64 *ptrp, void *context)
+{
+	return nilfs_btree_do_lookup_next(btree, context, keyp, ptrp);
+}
+
+static void nilfs_btree_find_close(struct nilfs_bmap *btree, void *context)
+{
+	if (context)
+		nilfs_btree_free_path(context);
+}
+
 static const struct nilfs_bmap_operations nilfs_btree_ops = {
 	.bop_lookup		=	nilfs_btree_lookup,
 	.bop_lookup_contig	=	nilfs_btree_lookup_contig,
@@ -2272,6 +2400,9 @@ static const struct nilfs_bmap_operations nilfs_btree_ops = {
 	.bop_check_insert	=	NULL,
 	.bop_check_delete	=	nilfs_btree_check_delete,
 	.bop_gather_data	=	nilfs_btree_gather_data,
+	.bop_find		=	nilfs_btree_find,
+	.bop_find_next		=	nilfs_btree_find_next,
+	.bop_find_close		=	nilfs_btree_find_close,
 };
 
 static const struct nilfs_bmap_operations nilfs_btree_ops_gc = {
@@ -2292,6 +2423,9 @@ static const struct nilfs_bmap_operations nilfs_btree_ops_gc = {
 	.bop_check_insert	=	NULL,
 	.bop_check_delete	=	NULL,
 	.bop_gather_data	=	NULL,
+	.bop_find		=	NULL,
+	.bop_find_next		=	NULL,
+	.bop_find_close		=	NULL,
 };
 
 int nilfs_btree_init(struct nilfs_bmap *bmap)
