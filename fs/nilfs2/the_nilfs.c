@@ -630,6 +630,10 @@ int init_nilfs(struct the_nilfs *nilfs, struct super_block *sb, char *data)
 	get_random_bytes(&nilfs->ns_next_generation,
 			 sizeof(nilfs->ns_next_generation));
 
+	nilfs->ns_feature_compat = le64_to_cpu(sbp->s_feature_compat);
+	nilfs->ns_feature_compat_ro = le64_to_cpu(sbp->s_feature_compat_ro);
+	nilfs->ns_feature_incompat = le64_to_cpu(sbp->s_feature_incompat);
+
 	err = nilfs_store_disk_layout(nilfs, sbp);
 	if (err)
 		goto failed_sbh;

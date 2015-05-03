@@ -101,6 +101,9 @@ enum {
  * @ns_dev_kobj: /sys/fs/<nilfs>/<device>
  * @ns_dev_kobj_unregister: completion state
  * @ns_dev_subgroups: <device> subgroups pointer
+ * @ns_feature_compat: Compatible feature set
+ * @ns_feature_compat_ro: Read-only compatible feature set
+ * @ns_feature_incompat: Incompatible feature set
  */
 struct the_nilfs {
 	unsigned long		ns_flags;
@@ -201,6 +204,11 @@ struct the_nilfs {
 	struct kobject ns_dev_kobj;
 	struct completion ns_dev_kobj_unregister;
 	struct nilfs_sysfs_dev_subgroups *ns_dev_subgroups;
+
+	/* Features */
+	__u64                   ns_feature_compat;
+	__u64                   ns_feature_compat_ro;
+	__u64                   ns_feature_incompat;
 };
 
 #define THE_NILFS_FNS(bit, name)					\
