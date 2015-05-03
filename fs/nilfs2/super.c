@@ -71,6 +71,7 @@ static struct kmem_cache *nilfs_inode_cachep;
 struct kmem_cache *nilfs_transaction_cachep;
 struct kmem_cache *nilfs_segbuf_cachep;
 struct kmem_cache *nilfs_btree_path_cache;
+struct kmem_cache *nilfs_sufile_node_cachep;
 
 static int nilfs_setup_super(struct super_block *sb, int is_mount);
 static int nilfs_remount(struct super_block *sb, int *flags, char *data);
@@ -1397,6 +1398,11 @@ static void nilfs_segbuf_init_once(void *obj)
 	memset(obj, 0, sizeof(struct nilfs_segment_buffer));
 }
 
+static void nilfs_sufile_cache_node_init_once(void *obj)
+{
+	memset(obj, 0, sizeof(struct nilfs_sufile_cache_node));
+}
+
 static void nilfs_destroy_cachep(void)
 {
 	/*
@@ -1413,6 +1419,8 @@ static void nilfs_destroy_cachep(void)
 		kmem_cache_destroy(nilfs_segbuf_cachep);
 	if (nilfs_btree_path_cache)
 		kmem_cache_destroy(nilfs_btree_path_cache);
+	if (nilfs_sufile_node_cachep)
+		kmem_cache_destroy(nilfs_sufile_node_cachep);
 }
 
 static int __init nilfs_init_cachep(void)
@@ -1439,6 +1447,12 @@ static int __init nilfs_init_cachep(void)
 			sizeof(struct nilfs_btree_path) * NILFS_BTREE_LEVEL_MAX,
 			0, 0, NULL);
 	if (!nilfs_btree_path_cache)
+		goto fail;
+
+	nilfs_sufile_node_cachep = kmem_cache_create("nilfs_sufile_node_cache",
+			sizeof(struct nilfs_sufile_cache_node), 0, 0,
+			nilfs_sufile_cache_node_init_once);
+	if (!nilfs_sufile_node_cachep)
 		goto fail;
 
 	return 0;

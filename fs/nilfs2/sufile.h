@@ -28,6 +28,20 @@
 #include <linux/nilfs2_fs.h>
 #include "mdt.h"
 
+#define NILFS_SUFILE_CACHE_NODE_SHIFT	6
+#define NILFS_SUFILE_CACHE_NODE_COUNT	(1 << NILFS_SUFILE_CACHE_NODE_SHIFT)
+
+struct nilfs_sufile_cache_node {
+	__u32 values[NILFS_SUFILE_CACHE_NODE_COUNT];
+	union {
+		struct rcu_head rcu_head;
+		struct list_head list_head;
+	};
+	unsigned long index;
+};
+
+extern struct kmem_cache *nilfs_sufile_node_cachep;
+
 static inline int
 nilfs_sufile_live_blks_ext_supported(const struct inode *sufile)
 {
