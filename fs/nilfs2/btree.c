@@ -30,6 +30,7 @@
 #include "btree.h"
 #include "alloc.h"
 #include "dat.h"
+#include "sufile.h"
 
 static void __nilfs_btree_init(struct nilfs_bmap *bmap);
 
@@ -1889,9 +1890,35 @@ static int nilfs_btree_propagate_p(struct nilfs_bmap *btree,
 				   int level,
 				   struct buffer_head *bh)
 {
-	while ((++level < nilfs_btree_height(btree) - 1) &&
-	       !buffer_dirty(path[level].bp_bh))
-		mark_buffer_dirty(path[level].bp_bh);
+	struct the_nilfs *nilfs = btree->b_inode->i_sb->s_fs_info;
+	struct nilfs_btree_node *node;
+	__u64 ptr, segnum;
+	int ncmax, vol, counted;
+
+	vol = buffer_nilfs_volatile(bh);
+	counted = buffer_nilfs_counted(bh);
+	set_buffer_nilfs_counted(bh);
+
+	while (++level < nilfs_btree_height(btree)) {
+		if (!vol && !counted && nilfs_feature_track_live_blks(nilfs)) {
+			node = nilfs_btree_get_node(btree, path, level, &ncmax);
+			ptr = nilfs_btree_node_get_ptr(node,
+						       path[level].bp_index,
+						       ncmax);
+			segnum = nilfs_get_segnum_of_block(nilfs, ptr);
+			nilfs_sufile_dec_nlive_blks(nilfs->ns_sufile, segnum);
+		}
+
+		if (path[level].bp_bh) {
+			if (buffer_dirty(path[level].bp_bh))
+				break;
+
+			mark_buffer_dirty(path[level].bp_bh);
+			vol = buffer_nilfs_volatile(path[level].bp_bh);
+			counted = buffer_nilfs_counted(path[level].bp_bh);
+			set_buffer_nilfs_counted(path[level].bp_bh);
+		}
+	}
 
 	return 0;
 }

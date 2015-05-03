@@ -762,7 +762,8 @@ static int nilfs_test_metadata_dirty(struct the_nilfs *nilfs,
 		ret++;
 	if (nilfs_mdt_fetch_dirty(nilfs->ns_cpfile))
 		ret++;
-	if (nilfs_mdt_fetch_dirty(nilfs->ns_sufile))
+	if (nilfs_mdt_fetch_dirty(nilfs->ns_sufile) ||
+	    nilfs_sufile_cache_dirty(nilfs->ns_sufile))
 		ret++;
 	if ((ret || nilfs_doing_gc()) && nilfs_mdt_fetch_dirty(nilfs->ns_dat))
 		ret++;
@@ -1368,36 +1369,49 @@ static void nilfs_free_incomplete_logs(struct list_head *logs,
 }
 
 static void nilfs_segctor_update_segusage(struct nilfs_sc_info *sci,
-					  struct inode *sufile)
+					  struct the_nilfs *nilfs)
 {
 	struct nilfs_segment_buffer *segbuf;
-	unsigned long live_blocks;
+	struct inode *sufile = nilfs->ns_sufile;
+	unsigned long nblocks;
 	int ret;
 
 	list_for_each_entry(segbuf, &sci->sc_segbufs, sb_list) {
-		live_blocks = segbuf->sb_sum.nblocks +
+		nblocks = segbuf->sb_sum.nblocks +
 			(segbuf->sb_pseg_start - segbuf->sb_fseg_start);
 		ret = nilfs_sufile_set_segment_usage(sufile, segbuf->sb_segnum,
-						     live_blocks,
+						     nblocks,
+						     segbuf->sb_nlive_blks,
+						     segbuf->sb_nsnapshot_blks,
 						     sci->sc_seg_ctime);
 		WARN_ON(ret); /* always succeed because the segusage is dirty */
+
+		segbuf->sb_flags |= NILFS_SEGBUF_SUSET;
 	}
 }
 
-static void nilfs_cancel_segusage(struct list_head *logs, struct inode *sufile)
+static void nilfs_cancel_segusage(struct list_head *logs,
+				  struct the_nilfs *nilfs)
 {
 	struct nilfs_segment_buffer *segbuf;
+	struct inode *sufile = nilfs->ns_sufile;
+	__s64 nlive_blks = 0, nsnapshot_blks = 0;
 	int ret;
 
 	segbuf = NILFS_FIRST_SEGBUF(logs);
+	if (segbuf->sb_flags & NILFS_SEGBUF_SUSET) {
+		nlive_blks = -(__s64)segbuf->sb_nlive_blks;
+		nsnapshot_blks = -(__s64)segbuf->sb_nsnapshot_blks;
+	}
 	ret = nilfs_sufile_set_segment_usage(sufile, segbuf->sb_segnum,
 					     segbuf->sb_pseg_start -
-					     segbuf->sb_fseg_start, 0);
+					     segbuf->sb_fseg_start,
+					     nlive_blks, nsnapshot_blks, 0);
 	WARN_ON(ret); /* always succeed because the segusage is dirty */
 
 	list_for_each_entry_continue(segbuf, logs, sb_list) {
 		ret = nilfs_sufile_set_segment_usage(sufile, segbuf->sb_segnum,
-						     0, 0);
+						     0, 0, 0, 0);
 		WARN_ON(ret); /* always succeed */
 	}
 }
@@ -1499,6 +1513,7 @@ nilfs_segctor_update_payload_blocknr(struct nilfs_sc_info *sci,
 	if (!nfinfo)
 		goto out;
 
+	segbuf->sb_nlive_blks = segbuf->sb_sum.nfileblk;
 	blocknr = segbuf->sb_pseg_start + segbuf->sb_sum.nsumblk;
 	ssp.bh = NILFS_SEGBUF_FIRST_BH(&segbuf->sb_segsum_buffers);
 	ssp.offset = sizeof(struct nilfs_segment_summary);
@@ -1728,7 +1743,7 @@ static void nilfs_segctor_abort_construction(struct nilfs_sc_info *sci,
 	nilfs_abort_logs(&logs, ret ? : err);
 
 	list_splice_tail_init(&sci->sc_segbufs, &logs);
-	nilfs_cancel_segusage(&logs, nilfs->ns_sufile);
+	nilfs_cancel_segusage(&logs, nilfs);
 	nilfs_free_incomplete_logs(&logs, nilfs);
 
 	if (sci->sc_stage.flags & NILFS_CF_SUFREED) {
@@ -1790,7 +1805,8 @@ static void nilfs_segctor_complete_write(struct nilfs_sc_info *sci)
 			const unsigned long clear_bits =
 				(1 << BH_Dirty | 1 << BH_Async_Write |
 				 1 << BH_Delay | 1 << BH_NILFS_Volatile |
-				 1 << BH_NILFS_Redirected);
+				 1 << BH_NILFS_Redirected |
+				 1 << BH_NILFS_Counted);
 
 			set_mask_bits(&bh->b_state, clear_bits, set_bits);
 			if (bh == segbuf->sb_super_root) {
@@ -1995,7 +2011,14 @@ static int nilfs_segctor_do_construct(struct nilfs_sc_info *sci, int mode)
 
 			nilfs_segctor_fill_in_super_root(sci, nilfs);
 		}
-		nilfs_segctor_update_segusage(sci, nilfs->ns_sufile);
+
+		if (nilfs_feature_track_live_blks(nilfs)) {
+			err = nilfs_sufile_flush_cache(nilfs->ns_sufile, 0,
+						       NULL);
+			if (unlikely(err))
+				goto failed_to_write;
+		}
+		nilfs_segctor_update_segusage(sci, nilfs);
 
 		/* Write partial segments */
 		nilfs_segctor_prepare_write(sci);
@@ -2021,6 +2044,9 @@ static int nilfs_segctor_do_construct(struct nilfs_sc_info *sci, int mode)
 				goto failed_to_write;
 		}
 	} while (sci->sc_stage.scnt != NILFS_ST_DONE);
+
+	if (nilfs_feature_track_live_blks(nilfs))
+		nilfs_sufile_shrink_cache(nilfs->ns_sufile);
 
  out:
 	nilfs_segctor_drop_written_files(sci, nilfs);

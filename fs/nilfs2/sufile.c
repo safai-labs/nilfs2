@@ -527,10 +527,13 @@ int nilfs_sufile_mark_dirty(struct inode *sufile, __u64 segnum)
  * @sufile: inode of segment usage file
  * @segnum: segment number
  * @nblocks: number of live blocks in the segment
+ * @nlive_blks: number of live blocks to add to the su_nlive_blks field
+ * @nsnapshot_blks: number of snapshot blocks to add to su_nsnapshot_blks
  * @modtime: modification time (option)
  */
 int nilfs_sufile_set_segment_usage(struct inode *sufile, __u64 segnum,
-				   unsigned long nblocks, time_t modtime)
+				   unsigned long nblocks, __s64 nlive_blks,
+				   __s64 nsnapshot_blks, time_t modtime)
 {
 	struct buffer_head *bh;
 	struct nilfs_segment_usage *su;
@@ -548,6 +551,18 @@ int nilfs_sufile_set_segment_usage(struct inode *sufile, __u64 segnum,
 	if (modtime)
 		su->su_lastmod = cpu_to_le64(modtime);
 	su->su_nblocks = cpu_to_le32(nblocks);
+
+	if (nilfs_sufile_live_blks_ext_supported(sufile)) {
+		nsnapshot_blks += le32_to_cpu(su->su_nsnapshot_blks);
+		nsnapshot_blks = min_t(__s64, max_t(__s64, nsnapshot_blks, 0),
+				       nblocks);
+		su->su_nsnapshot_blks = cpu_to_le32(nsnapshot_blks);
+
+		nlive_blks += le32_to_cpu(su->su_nlive_blks);
+		nlive_blks = min_t(__s64, max_t(__s64, nlive_blks, 0), nblocks);
+		su->su_nlive_blks = cpu_to_le32(nlive_blks);
+	}
+
 	kunmap_atomic(kaddr);
 
 	mark_buffer_dirty(bh);

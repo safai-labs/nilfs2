@@ -83,6 +83,9 @@ struct nilfs_segment_buffer {
 	sector_t		sb_fseg_start, sb_fseg_end;
 	sector_t		sb_pseg_start;
 	unsigned		sb_rest_blocks;
+	int			sb_flags;
+	__u32			sb_nlive_blks;
+	__u32			sb_nsnapshot_blks;
 
 	/* Buffers */
 	struct list_head	sb_segsum_buffers;
@@ -94,6 +97,8 @@ struct nilfs_segment_buffer {
 	atomic_t		sb_err;
 	struct completion	sb_bio_event;
 };
+
+#define NILFS_SEGBUF_SUSET	BIT(0)	/* segment usage has been set */
 
 #define NILFS_LIST_SEGBUF(head)  \
 	list_entry((head), struct nilfs_segment_buffer, sb_list)

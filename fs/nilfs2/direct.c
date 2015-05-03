@@ -26,6 +26,7 @@
 #include "direct.h"
 #include "alloc.h"
 #include "dat.h"
+#include "sufile.h"
 
 static inline __le64 *nilfs_direct_dptrs(const struct nilfs_bmap *direct)
 {
@@ -268,18 +269,27 @@ int nilfs_direct_delete_and_convert(struct nilfs_bmap *bmap,
 static int nilfs_direct_propagate(struct nilfs_bmap *bmap,
 				  struct buffer_head *bh)
 {
+	struct the_nilfs *nilfs = bmap->b_inode->i_sb->s_fs_info;
 	struct nilfs_palloc_req oldreq, newreq;
 	struct inode *dat;
-	__u64 key;
-	__u64 ptr;
+	__u64 key, ptr, segnum;
 	int ret;
-
-	if (!NILFS_BMAP_USE_VBN(bmap))
-		return 0;
 
 	dat = nilfs_bmap_get_dat(bmap);
 	key = nilfs_bmap_data_get_key(bmap, bh);
 	ptr = nilfs_direct_get_ptr(bmap, key);
+
+	if (unlikely(!NILFS_BMAP_USE_VBN(bmap))) {
+		if (!buffer_nilfs_volatile(bh) && !buffer_nilfs_counted(bh) &&
+				nilfs_feature_track_live_blks(nilfs)) {
+			set_buffer_nilfs_counted(bh);
+			segnum = nilfs_get_segnum_of_block(nilfs, ptr);
+
+			nilfs_sufile_dec_nlive_blks(nilfs->ns_sufile, segnum);
+		}
+		return 0;
+	}
+
 	if (!buffer_nilfs_volatile(bh)) {
 		oldreq.pr_entry_nr = ptr;
 		newreq.pr_entry_nr = ptr;
