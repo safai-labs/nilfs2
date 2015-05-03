@@ -401,4 +401,12 @@ static inline int nilfs_flush_device(struct the_nilfs *nilfs)
 	return err;
 }
 
+static inline int nilfs_feature_track_live_blks(struct the_nilfs *nilfs)
+{
+	const __u64 required_bits = NILFS_FEATURE_COMPAT_TRACK_LIVE_BLKS |
+				    NILFS_FEATURE_COMPAT_SUFILE_LIVE_BLKS_EXT;
+
+	return ((nilfs->ns_feature_compat & required_bits) == required_bits);
+}
+
 #endif /* _THE_NILFS_H */
