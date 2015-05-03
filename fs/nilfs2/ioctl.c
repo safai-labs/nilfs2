@@ -612,6 +612,12 @@ static int nilfs_ioctl_move_inode_block(struct inode *inode,
 		brelse(bh);
 		return -EEXIST;
 	}
+
+	if (nilfs_vdesc_snapshot_protected(vdesc))
+		set_buffer_nilfs_snapshot_protected(bh);
+	if (nilfs_vdesc_period_protected(vdesc))
+		set_buffer_nilfs_period_protected(bh);
+
 	list_add_tail(&bh->b_assoc_buffers, buffers);
 	return 0;
 }
@@ -662,6 +668,15 @@ static int nilfs_ioctl_move_blocks(struct super_block *sb,
 		}
 
 		do {
+			/*
+			 * old user space tools to not initialize vd_blk_flags
+			 * if vd_period.p_start > 0 then vd_blk_flags was
+			 * not initialized properly and may contain invalid
+			 * flags
+			 */
+			if (vdesc->vd_period.p_start > 0)
+				vdesc->vd_blk_flags = 0;
+
 			ret = nilfs_ioctl_move_inode_block(inode, vdesc,
 							   &buffers);
 			if (unlikely(ret < 0)) {

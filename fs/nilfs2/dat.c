@@ -35,6 +35,17 @@
 #define NILFS_CNO_MAX	(~(__u64)0)
 
 /**
+ * nilfs_dat_entry_is_live - check if @entry is alive
+ * @entry: DAT-Entry
+ *
+ * Description: Simple check if @entry is alive in the current checkpoint.
+ */
+static int nilfs_dat_entry_is_live(struct nilfs_dat_entry *entry)
+{
+	return entry->de_end == cpu_to_le64(NILFS_CNO_MAX);
+}
+
+/**
  * struct nilfs_dat_info - on-memory private data of DAT file
  * @mi: on-memory private data of metadata file
  * @palloc_cache: persistent object allocator cache of DAT file
@@ -384,6 +395,61 @@ int nilfs_dat_move(struct inode *dat, __u64 vblocknr, sector_t blocknr)
 	brelse(entry_bh);
 
 	return 0;
+}
+
+/**
+ * nilfs_dat_is_live - checks if the virtual block number is alive
+ * @dat: DAT file inode
+ * @vblocknr: virtual block number
+ *
+ * Description: nilfs_dat_is_live() looks up the DAT-Entry for
+ * @vblocknr and determines if the corresponding block is alive in the current
+ * checkpoint or not. This check ignores snapshots and protection periods.
+ *
+ * Return Value: 1 if vblocknr is alive and 0 otherwise. On error one of the
+ * following negative error codes is returned
+ *
+ * %-EIO - I/O error.
+ *
+ * %-ENOMEM - Insufficient amount of memory available.
+ *
+ * %-ENOENT - A block number associated with @vblocknr does not exist.
+ */
+int nilfs_dat_is_live(struct inode *dat, __u64 vblocknr)
+{
+	struct buffer_head *entry_bh, *bh;
+	struct nilfs_dat_entry *entry;
+	sector_t blocknr;
+	void *kaddr;
+	int ret;
+
+	ret = nilfs_palloc_get_entry_block(dat, vblocknr, 0, &entry_bh);
+	if (ret < 0)
+		return ret;
+
+	if (!nilfs_doing_gc() && buffer_nilfs_redirected(entry_bh)) {
+		bh = nilfs_mdt_get_frozen_buffer(dat, entry_bh);
+		if (bh) {
+			WARN_ON(!buffer_uptodate(bh));
+			put_bh(entry_bh);
+			entry_bh = bh;
+		}
+	}
+
+	kaddr = kmap_atomic(entry_bh->b_page);
+	entry = nilfs_palloc_block_get_entry(dat, vblocknr, entry_bh, kaddr);
+	blocknr = le64_to_cpu(entry->de_blocknr);
+	if (blocknr == 0) {
+		ret = -ENOENT;
+		goto out_unmap;
+	}
+
+	ret = nilfs_dat_entry_is_live(entry);
+
+out_unmap:
+	kunmap_atomic(kaddr);
+	put_bh(entry_bh);
+	return ret;
 }
 
 /**

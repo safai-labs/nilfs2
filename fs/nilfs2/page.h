@@ -36,6 +36,8 @@ enum {
 	BH_NILFS_Volatile,
 	BH_NILFS_Checked,
 	BH_NILFS_Redirected,
+	BH_NILFS_Snapshot_Protected,
+	BH_NILFS_Period_Protected,
 	BH_NILFS_Counted,
 };
 
@@ -43,6 +45,10 @@ BUFFER_FNS(NILFS_Node, nilfs_node)		/* nilfs node buffers */
 BUFFER_FNS(NILFS_Volatile, nilfs_volatile)
 BUFFER_FNS(NILFS_Checked, nilfs_checked)	/* buffer is verified */
 BUFFER_FNS(NILFS_Redirected, nilfs_redirected)	/* redirected to a copy */
+/* buffer belongs to a snapshot and is protected by it */
+BUFFER_FNS(NILFS_Snapshot_Protected, nilfs_snapshot_protected)
+/* protected by protection period */
+BUFFER_FNS(NILFS_Period_Protected, nilfs_period_protected)
 /* counted by propagate_p for segment usage */
 BUFFER_FNS(NILFS_Counted, nilfs_counted)
 

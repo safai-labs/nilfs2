@@ -47,6 +47,7 @@ void nilfs_dat_commit_update(struct inode *, struct nilfs_palloc_req *,
 			     struct nilfs_palloc_req *, int);
 void nilfs_dat_abort_update(struct inode *, struct nilfs_palloc_req *,
 			    struct nilfs_palloc_req *);
+int nilfs_dat_is_live(struct inode *dat, __u64 vblocknr);
 
 int nilfs_dat_mark_dirty(struct inode *, __u64);
 int nilfs_dat_freev(struct inode *, __u64 *, size_t);

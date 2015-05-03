@@ -905,7 +905,7 @@ struct nilfs_vinfo {
  * @vd_blocknr: disk block number
  * @vd_offset: logical block offset inside a file
  * @vd_flags: flags (data or node block)
- * @vd_pad: padding
+ * @vd_blk_flags: additional flags
  */
 struct nilfs_vdesc {
 	__u64 vd_ino;
@@ -915,8 +915,42 @@ struct nilfs_vdesc {
 	__u64 vd_blocknr;
 	__u64 vd_offset;
 	__u32 vd_flags;
-	__u32 vd_pad;
+	/*
+	 * vd_blk_flags needed because vd_flags doesn't support
+	 * bit-flags because of backwards compatibility
+	 */
+	__u32 vd_blk_flags;
 };
+
+/* vdesc flags */
+enum {
+	NILFS_VDESC_SNAPSHOT_PROTECTED,
+	NILFS_VDESC_PERIOD_PROTECTED,
+
+	/* ... */
+
+	__NR_NILFS_VDESC_FIELDS,
+};
+
+#define NILFS_VDESC_FNS(flag, name)					\
+static inline void							\
+nilfs_vdesc_set_##name(struct nilfs_vdesc *vdesc)			\
+{									\
+	vdesc->vd_blk_flags |= (1UL << NILFS_VDESC_##flag);		\
+}									\
+static inline void							\
+nilfs_vdesc_clear_##name(struct nilfs_vdesc *vdesc)			\
+{									\
+	vdesc->vd_blk_flags &= ~(1UL << NILFS_VDESC_##flag);		\
+}									\
+static inline int							\
+nilfs_vdesc_##name(const struct nilfs_vdesc *vdesc)			\
+{									\
+	return !!(vdesc->vd_blk_flags & (1UL << NILFS_VDESC_##flag));	\
+}
+
+NILFS_VDESC_FNS(SNAPSHOT_PROTECTED, snapshot_protected)
+NILFS_VDESC_FNS(PERIOD_PROTECTED, period_protected)
 
 /**
  * struct nilfs_bdesc - descriptor of disk block number
