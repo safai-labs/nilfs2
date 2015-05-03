@@ -579,6 +579,12 @@ static int nilfs_collect_dat_data(struct nilfs_sc_info *sci,
 	return err;
 }
 
+static int nilfs_collect_prop_data(struct nilfs_sc_info *sci,
+				  struct buffer_head *bh, struct inode *inode)
+{
+	return nilfs_bmap_propagate(NILFS_I(inode)->i_bmap, bh);
+}
+
 static int nilfs_collect_dat_bmap(struct nilfs_sc_info *sci,
 				  struct buffer_head *bh, struct inode *inode)
 {
@@ -611,6 +617,14 @@ static struct nilfs_sc_operations nilfs_sc_dat_ops = {
 	.collect_bmap = nilfs_collect_dat_bmap,
 	.write_data_binfo = nilfs_write_dat_data_binfo,
 	.write_node_binfo = nilfs_write_dat_node_binfo,
+};
+
+static struct nilfs_sc_operations nilfs_sc_prop_ops = {
+	.collect_data = nilfs_collect_prop_data,
+	.collect_node = nilfs_collect_file_node,
+	.collect_bmap = NULL,
+	.write_data_binfo = NULL,
+	.write_node_binfo = NULL,
 };
 
 static struct nilfs_sc_operations nilfs_sc_dsync_ops = {
@@ -998,7 +1012,8 @@ static int nilfs_segctor_scan_file(struct nilfs_sc_info *sci,
 			err = nilfs_segctor_apply_buffers(
 				sci, inode, &data_buffers,
 				sc_ops->collect_data);
-			BUG_ON(!err); /* always receive -E2BIG or true error */
+			/* always receive -E2BIG or true error (NOT ANYMORE?)*/
+			/* BUG_ON(!err); */
 			goto break_or_fail;
 		}
 	}
@@ -1053,6 +1068,55 @@ static int nilfs_segctor_scan_file_dsync(struct nilfs_sc_info *sci,
 		/* always receive -E2BIG or true error if n > rest */
 	}
 	return err;
+}
+
+/**
+ * nilfs_segctor_propagate_sufile - dirties all needed SUFILE blocks
+ * @sci: nilfs_sc_info
+ *
+ * Description: Dirties and propagates all SUFILE blocks that need to be
+ * available later in the segment construction process, when the SUFILE cache
+ * is flushed. Here the SUFILE cache is not actually flushed, but the blocks
+ * that are needed for a later flush are marked as dirty. Since the propagation
+ * of the SUFILE can dirty DAT entries and vice versa, the functions
+ * are executed in a loop until no new blocks are dirtied.
+ *
+ * Return Value: On success, 0 is returned on error, one of the following
+ * negative error codes is returned.
+ *
+ * %-ENOMEM - Insufficient memory available.
+ *
+ * %-EIO - I/O error
+ *
+ * %-EROFS - Read only filesystem (for create mode)
+ */
+static int nilfs_segctor_propagate_sufile(struct nilfs_sc_info *sci)
+{
+	struct the_nilfs *nilfs = sci->sc_super->s_fs_info;
+	unsigned long ndirty_blks;
+	int ret, retrycount = NILFS_SC_SUFILE_PROP_RETRY;
+
+	do {
+		/* count changes to DAT file before flush */
+		ret = nilfs_segctor_scan_file(sci, nilfs->ns_dat,
+					      &nilfs_sc_prop_ops);
+		if (unlikely(ret))
+			return ret;
+
+		ret = nilfs_sufile_flush_cache(nilfs->ns_sufile, 1,
+					       &ndirty_blks);
+		if (unlikely(ret))
+			return ret;
+		if (!ndirty_blks)
+			break;
+
+		ret = nilfs_segctor_scan_file(sci, nilfs->ns_sufile,
+					      &nilfs_sc_prop_ops);
+		if (unlikely(ret))
+			return ret;
+	} while (ndirty_blks && retrycount-- > 0);
+
+	return 0;
 }
 
 static int nilfs_segctor_collect_blocks(struct nilfs_sc_info *sci, int mode)
@@ -1159,6 +1223,13 @@ static int nilfs_segctor_collect_blocks(struct nilfs_sc_info *sci, int mode)
 			break;
 		}
 		sci->sc_stage.flags |= NILFS_CF_SUFREED;
+
+		if (mode == SC_LSEG_SR &&
+		    nilfs_feature_track_live_blks(nilfs)) {
+			err = nilfs_segctor_propagate_sufile(sci);
+			if (unlikely(err))
+				break;
+		}
 
 		err = nilfs_segctor_scan_file(sci, nilfs->ns_sufile,
 					      &nilfs_sc_file_ops);

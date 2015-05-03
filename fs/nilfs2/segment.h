@@ -208,7 +208,8 @@ enum {
  */
 #define NILFS_SC_CLEANUP_RETRY	    3  /* Retry count of construction when
 					  destroying segctord */
-
+#define NILFS_SC_SUFILE_PROP_RETRY  10 /* Retry count of the propagate
+					  sufile loop */
 /*
  * Default values of timeout, in seconds.
  */
