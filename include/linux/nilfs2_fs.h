@@ -220,9 +220,12 @@ struct nilfs_super_block {
  * If there is a bit set in the incompatible feature set that the kernel
  * doesn't know about, it should refuse to mount the filesystem.
  */
-#define NILFS_FEATURE_COMPAT_RO_BLOCK_COUNT	0x00000001ULL
+#define NILFS_FEATURE_COMPAT_SUFILE_LIVE_BLKS_EXT	BIT(0)
 
-#define NILFS_FEATURE_COMPAT_SUPP	0ULL
+#define NILFS_FEATURE_COMPAT_RO_BLOCK_COUNT		BIT(0)
+
+#define NILFS_FEATURE_COMPAT_SUPP					\
+			(NILFS_FEATURE_COMPAT_SUFILE_LIVE_BLKS_EXT)
 #define NILFS_FEATURE_COMPAT_RO_SUPP	NILFS_FEATURE_COMPAT_RO_BLOCK_COUNT
 #define NILFS_FEATURE_INCOMPAT_SUPP	0ULL
 
@@ -609,19 +612,34 @@ struct nilfs_cpfile_header {
 	  sizeof(struct nilfs_checkpoint) - 1) /			\
 			sizeof(struct nilfs_checkpoint))
 
+#ifndef offsetofend
+#define offsetofend(TYPE, MEMBER) \
+		(offsetof(TYPE, MEMBER) + sizeof(((TYPE *)0)->MEMBER))
+#endif
+
 /**
  * struct nilfs_segment_usage - segment usage
  * @su_lastmod: last modified timestamp
  * @su_nblocks: number of blocks in segment
  * @su_flags: flags
+ * @su_nlive_blks: number of live blocks in the segment
+ * @su_nsnapshot_blks: number of blocks belonging to a snapshot in the segment
+ * @su_nlive_lastmod: timestamp nlive_blks was last modified
  */
 struct nilfs_segment_usage {
 	__le64 su_lastmod;
 	__le32 su_nblocks;
 	__le32 su_flags;
+	__le32 su_nlive_blks;
+	__le32 su_nsnapshot_blks;
+	__le64 su_nlive_lastmod;
 };
 
-#define NILFS_MIN_SEGMENT_USAGE_SIZE	16
+#define NILFS_MIN_SEGMENT_USAGE_SIZE	\
+	offsetofend(struct nilfs_segment_usage, su_flags)
+
+#define NILFS_LIVE_BLKS_EXT_SEGMENT_USAGE_SIZE	\
+	offsetofend(struct nilfs_segment_usage, su_nlive_lastmod)
 
 /* segment usage flag */
 enum {
@@ -658,11 +676,16 @@ NILFS_SEGMENT_USAGE_FNS(DIRTY, dirty)
 NILFS_SEGMENT_USAGE_FNS(ERROR, error)
 
 static inline void
-nilfs_segment_usage_set_clean(struct nilfs_segment_usage *su)
+nilfs_segment_usage_set_clean(struct nilfs_segment_usage *su, size_t susz)
 {
 	su->su_lastmod = cpu_to_le64(0);
 	su->su_nblocks = cpu_to_le32(0);
 	su->su_flags = cpu_to_le32(0);
+	if (susz >= NILFS_LIVE_BLKS_EXT_SEGMENT_USAGE_SIZE) {
+		su->su_nlive_blks = cpu_to_le32(0);
+		su->su_nsnapshot_blks = cpu_to_le32(0);
+		su->su_nlive_lastmod = cpu_to_le64(0);
+	}
 }
 
 static inline int
@@ -684,22 +707,32 @@ struct nilfs_sufile_header {
 	/* ... */
 };
 
-#define NILFS_SUFILE_FIRST_SEGMENT_USAGE_OFFSET	\
-	((sizeof(struct nilfs_sufile_header) +				\
-	  sizeof(struct nilfs_segment_usage) - 1) /			\
-			 sizeof(struct nilfs_segment_usage))
+#define NILFS_SUFILE_FIRST_SEGMENT_USAGE_OFFSET(susz)	\
+	((sizeof(struct nilfs_sufile_header) + (susz) - 1) / (susz))
 
 /**
  * nilfs_suinfo - segment usage information
  * @sui_lastmod: timestamp of last modification
  * @sui_nblocks: number of written blocks in segment
  * @sui_flags: segment usage flags
+ * @sui_nlive_blks: number of live blocks in the segment
+ * @sui_nsnapshot_blks: number of blocks belonging to a snapshot in the segment
+ * @sui_nlive_lastmod: timestamp nlive_blks was last modified
  */
 struct nilfs_suinfo {
 	__u64 sui_lastmod;
 	__u32 sui_nblocks;
 	__u32 sui_flags;
+	__u32 sui_nlive_blks;
+	__u32 sui_nsnapshot_blks;
+	__u64 sui_nlive_lastmod;
 };
+
+#define NILFS_MIN_SUINFO_SIZE	\
+	offsetofend(struct nilfs_suinfo, sui_flags)
+
+#define NILFS_LIVE_BLKS_EXT_SUINFO_SIZE	\
+	offsetofend(struct nilfs_suinfo, sui_nlive_lastmod)
 
 #define NILFS_SUINFO_FNS(flag, name)					\
 static inline int							\
@@ -736,6 +769,9 @@ enum {
 	NILFS_SUINFO_UPDATE_LASTMOD,
 	NILFS_SUINFO_UPDATE_NBLOCKS,
 	NILFS_SUINFO_UPDATE_FLAGS,
+	NILFS_SUINFO_UPDATE_NLIVE_BLKS,
+	NILFS_SUINFO_UPDATE_NLIVE_LASTMOD,
+	NILFS_SUINFO_UPDATE_NSNAPSHOT_BLKS,
 	__NR_NILFS_SUINFO_UPDATE_FIELDS,
 };
 
@@ -759,6 +795,17 @@ nilfs_suinfo_update_##name(const struct nilfs_suinfo_update *sup)	\
 NILFS_SUINFO_UPDATE_FNS(LASTMOD, lastmod)
 NILFS_SUINFO_UPDATE_FNS(NBLOCKS, nblocks)
 NILFS_SUINFO_UPDATE_FNS(FLAGS, flags)
+NILFS_SUINFO_UPDATE_FNS(NLIVE_BLKS, nlive_blks)
+NILFS_SUINFO_UPDATE_FNS(NSNAPSHOT_BLKS, nsnapshot_blks)
+NILFS_SUINFO_UPDATE_FNS(NLIVE_LASTMOD, nlive_lastmod)
+
+#define NILFS_MIN_SUINFO_UPDATE_SIZE	\
+	(offsetofend(struct nilfs_suinfo_update, sup_reserved) + \
+	NILFS_MIN_SUINFO_SIZE)
+
+#define NILFS_LIVE_BLKS_EXT_SUINFO_UPDATE_SIZE	\
+	(offsetofend(struct nilfs_suinfo_update, sup_reserved) + \
+	NILFS_LIVE_BLKS_EXT_SUINFO_SIZE)
 
 enum {
 	NILFS_CHECKPOINT,

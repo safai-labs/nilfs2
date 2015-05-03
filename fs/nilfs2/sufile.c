@@ -453,6 +453,11 @@ void nilfs_sufile_do_scrap(struct inode *sufile, __u64 segnum,
 	su->su_lastmod = cpu_to_le64(0);
 	su->su_nblocks = cpu_to_le32(0);
 	su->su_flags = cpu_to_le32(1UL << NILFS_SEGMENT_USAGE_DIRTY);
+	if (nilfs_sufile_live_blks_ext_supported(sufile)) {
+		su->su_nlive_blks = cpu_to_le32(0);
+		su->su_nsnapshot_blks = cpu_to_le32(0);
+		su->su_nlive_lastmod = cpu_to_le64(0);
+	}
 	kunmap_atomic(kaddr);
 
 	nilfs_sufile_mod_counter(header_bh, clean ? (u64)-1 : 0, dirty ? 0 : 1);
@@ -482,7 +487,7 @@ void nilfs_sufile_do_free(struct inode *sufile, __u64 segnum,
 	WARN_ON(!nilfs_segment_usage_dirty(su));
 
 	sudirty = nilfs_segment_usage_dirty(su);
-	nilfs_segment_usage_set_clean(su);
+	nilfs_segment_usage_set_clean(su, NILFS_MDT(sufile)->mi_entry_size);
 	kunmap_atomic(kaddr);
 	mark_buffer_dirty(su_bh);
 
@@ -698,7 +703,7 @@ static int nilfs_sufile_truncate_range(struct inode *sufile,
 		nc = 0;
 		for (su = su2, j = 0; j < n; j++, su = (void *)su + susz) {
 			if (nilfs_segment_usage_error(su)) {
-				nilfs_segment_usage_set_clean(su);
+				nilfs_segment_usage_set_clean(su, susz);
 				nc++;
 			}
 		}
@@ -821,6 +826,8 @@ ssize_t nilfs_sufile_get_suinfo(struct inode *sufile, __u64 segnum, void *buf,
 	struct the_nilfs *nilfs = sufile->i_sb->s_fs_info;
 	void *kaddr;
 	unsigned long nsegs, segusages_per_block;
+	__u64 lm = 0;
+	__u32 nlb = 0, nsb = 0;
 	ssize_t n;
 	int ret, i, j;
 
@@ -858,6 +865,18 @@ ssize_t nilfs_sufile_get_suinfo(struct inode *sufile, __u64 segnum, void *buf,
 			if (nilfs_segment_is_active(nilfs, segnum + j))
 				si->sui_flags |=
 					(1UL << NILFS_SEGMENT_USAGE_ACTIVE);
+
+			if (susz >= NILFS_LIVE_BLKS_EXT_SEGMENT_USAGE_SIZE) {
+				nlb = le32_to_cpu(su->su_nlive_blks);
+				nsb = le32_to_cpu(su->su_nsnapshot_blks);
+				lm = le64_to_cpu(su->su_nlive_lastmod);
+			}
+
+			if (sisz >= NILFS_LIVE_BLKS_EXT_SUINFO_SIZE) {
+				si->sui_nlive_blks = nlb;
+				si->sui_nsnapshot_blks = nsb;
+				si->sui_nlive_lastmod = lm;
+			}
 		}
 		kunmap_atomic(kaddr);
 		brelse(su_bh);
@@ -901,6 +920,9 @@ ssize_t nilfs_sufile_set_suinfo(struct inode *sufile, void *buf,
 	int cleansi, cleansu, dirtysi, dirtysu;
 	long ncleaned = 0, ndirtied = 0;
 	int ret = 0;
+	bool sup_ext = (supsz >= NILFS_LIVE_BLKS_EXT_SUINFO_UPDATE_SIZE);
+	bool su_ext = nilfs_sufile_live_blks_ext_supported(sufile);
+	bool supsu_ext = sup_ext && su_ext;
 
 	if (unlikely(nsup == 0))
 		return ret;
@@ -911,6 +933,13 @@ ssize_t nilfs_sufile_set_suinfo(struct inode *sufile, void *buf,
 				(~0UL << __NR_NILFS_SUINFO_UPDATE_FIELDS))
 			|| (nilfs_suinfo_update_nblocks(sup) &&
 				sup->sup_sui.sui_nblocks >
+				nilfs->ns_blocks_per_segment)
+			|| (nilfs_suinfo_update_nlive_blks(sup) && sup_ext &&
+				sup->sup_sui.sui_nlive_blks >
+				nilfs->ns_blocks_per_segment)
+			|| (nilfs_suinfo_update_nsnapshot_blks(sup) &&
+				sup_ext &&
+				sup->sup_sui.sui_nsnapshot_blks >
 				nilfs->ns_blocks_per_segment))
 			return -EINVAL;
 	}
@@ -937,6 +966,18 @@ ssize_t nilfs_sufile_set_suinfo(struct inode *sufile, void *buf,
 
 		if (nilfs_suinfo_update_nblocks(sup))
 			su->su_nblocks = cpu_to_le32(sup->sup_sui.sui_nblocks);
+
+		if (nilfs_suinfo_update_nlive_blks(sup) && supsu_ext)
+			su->su_nlive_blks =
+				cpu_to_le32(sup->sup_sui.sui_nlive_blks);
+
+		if (nilfs_suinfo_update_nsnapshot_blks(sup) && supsu_ext)
+			su->su_nsnapshot_blks =
+				cpu_to_le32(sup->sup_sui.sui_nsnapshot_blks);
+
+		if (nilfs_suinfo_update_nlive_lastmod(sup) && supsu_ext)
+			su->su_nlive_lastmod =
+				cpu_to_le64(sup->sup_sui.sui_nlive_lastmod);
 
 		if (nilfs_suinfo_update_flags(sup)) {
 			/*
