@@ -30,6 +30,7 @@
 
 #define NILFS_SUFILE_CACHE_NODE_SHIFT	6
 #define NILFS_SUFILE_CACHE_NODE_COUNT	(1 << NILFS_SUFILE_CACHE_NODE_SHIFT)
+#define NILFS_SUFILE_STARVING_SEGS_STEP (1 << 15)
 
 struct nilfs_sufile_cache_node {
 	__u32 values[NILFS_SUFILE_CACHE_NODE_COUNT];
@@ -88,6 +89,8 @@ int nilfs_sufile_resize(struct inode *sufile, __u64 newnsegs);
 int nilfs_sufile_read(struct super_block *sb, size_t susize,
 		      struct nilfs_inode *raw_inode, struct inode **inodep);
 int nilfs_sufile_trim_fs(struct inode *sufile, struct fstrim_range *range);
+int nilfs_sufile_fix_starving_segs(struct inode *sufile, __u64 segnum,
+				   __u64 nsegs);
 int nilfs_sufile_dec_nlive_blks(struct inode *sufile, __u64 segnum);
 void nilfs_sufile_shrink_cache(struct inode *sufile);
 int nilfs_sufile_flush_cache(struct inode *sufile, int only_mark,

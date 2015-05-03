@@ -1215,6 +1215,91 @@ out_sem:
 }
 
 /**
+ * nilfs_sufile_fix_starving_segs - fix potentially starving segments
+ * @sufile: inode of segment usage file
+ * @segnum: segnum to start
+ * @nsegs: number of segments to check
+ *
+ * Description: Scans for segments, which are potentially starving and
+ * reduces the number of live blocks to less than half of the maximum
+ * number of blocks in a segment. This way the segment is more likely to be
+ * chosen by the GC. A segment is marked as potentially starving, if more
+ * than half of the blocks it contains are protected by snapshots.
+ *
+ * Return Value: On success, 0 is returned and on error, one of the
+ * following negative error codes is returned.
+ *
+ * %-EIO - I/O error.
+ *
+ * %-ENOMEM - Insufficient amount of memory available.
+ */
+int nilfs_sufile_fix_starving_segs(struct inode *sufile, __u64 segnum,
+				   __u64 nsegs)
+{
+	struct buffer_head *su_bh;
+	struct nilfs_segment_usage *su;
+	size_t n, i, susz = NILFS_MDT(sufile)->mi_entry_size;
+	struct the_nilfs *nilfs = sufile->i_sb->s_fs_info;
+	void *kaddr;
+	unsigned long maxnsegs, segusages_per_block;
+	__u32 max_segblks = nilfs->ns_blocks_per_segment >> 1;
+	int ret = 0, blkdirty, dirty = 0;
+
+	down_write(&NILFS_MDT(sufile)->mi_sem);
+
+	maxnsegs = nilfs_sufile_get_nsegments(sufile);
+	segusages_per_block = nilfs_sufile_segment_usages_per_block(sufile);
+	nsegs += segnum;
+	if (nsegs > maxnsegs)
+		nsegs = maxnsegs;
+
+	while (segnum < nsegs) {
+		n = nilfs_sufile_segment_usages_in_block(sufile, segnum,
+							 nsegs - 1);
+
+		ret = nilfs_sufile_get_segment_usage_block(sufile, segnum,
+							   0, &su_bh);
+		if (ret < 0) {
+			if (ret != -ENOENT)
+				goto out;
+			/* hole */
+			segnum += n;
+			continue;
+		}
+
+		kaddr = kmap_atomic(su_bh->b_page);
+		su = nilfs_sufile_block_get_segment_usage(sufile, segnum,
+							  su_bh, kaddr);
+		blkdirty = 0;
+		for (i = 0; i < n; ++i, ++segnum, su = (void *)su + susz) {
+			if (le32_to_cpu(su->su_nsnapshot_blks) <= max_segblks)
+				continue;
+			if (le32_to_cpu(su->su_nlive_blks) <= max_segblks)
+				continue;
+
+			su->su_nlive_blks = cpu_to_le32(max_segblks);
+			su->su_nsnapshot_blks = cpu_to_le32(max_segblks);
+			blkdirty = 1;
+		}
+
+		kunmap_atomic(kaddr);
+		if (blkdirty) {
+			mark_buffer_dirty(su_bh);
+			dirty = 1;
+		}
+		put_bh(su_bh);
+		cond_resched();
+	}
+
+out:
+	if (dirty)
+		nilfs_mdt_mark_dirty(sufile);
+
+	up_write(&NILFS_MDT(sufile)->mi_sem);
+	return ret;
+}
+
+/**
  * nilfs_sufile_alloc_cache_node - allocate and insert a new cache node
  * @sufile: inode of segment usage file
  * @group: group to allocate a node for

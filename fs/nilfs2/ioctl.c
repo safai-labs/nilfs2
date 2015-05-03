@@ -200,6 +200,49 @@ static int nilfs_ioctl_getversion(struct inode *inode, void __user *argp)
 }
 
 /**
+ * nilfs_ioctl_fix_starving_segs - fix potentially starving segments
+ * @nilfs: nilfs object
+ * @inode: inode object
+ *
+ * Description: Scans for segments, which are potentially starving and
+ * reduces the number of live blocks to less than half of the maximum
+ * number of blocks in a segment. This requires a scan of the whole SUFILE,
+ * which can take a long time on certain devices and under certain conditions.
+ * To avoid blocking other file system operations for too long the SUFILE is
+ * scanned in steps of NILFS_SUFILE_STARVING_SEGS_STEP. After each step the
+ * locks are released and cond_resched() is called.
+ *
+ * Return Value: On success, 0 is returned and on error, one of the
+ * following negative error codes is returned.
+ *
+ * %-EIO - I/O error.
+ *
+ * %-ENOMEM - Insufficient amount of memory available.
+ */
+static int nilfs_ioctl_fix_starving_segs(struct the_nilfs *nilfs,
+					 struct inode *inode) {
+	struct nilfs_transaction_info ti;
+	unsigned long i, nsegs = nilfs_sufile_get_nsegments(nilfs->ns_sufile);
+	int ret = 0;
+
+	for (i = 0; i < nsegs; i += NILFS_SUFILE_STARVING_SEGS_STEP) {
+		nilfs_transaction_begin(inode->i_sb, &ti, 0);
+
+		ret = nilfs_sufile_fix_starving_segs(nilfs->ns_sufile, i,
+				NILFS_SUFILE_STARVING_SEGS_STEP);
+		if (unlikely(ret < 0)) {
+			nilfs_transaction_abort(inode->i_sb);
+			break;
+		}
+
+		nilfs_transaction_commit(inode->i_sb); /* never fails */
+		cond_resched();
+	}
+
+	return ret;
+}
+
+/**
  * nilfs_ioctl_change_cpmode - change checkpoint mode (checkpoint/snapshot)
  * @inode: inode object
  * @filp: file object
@@ -224,7 +267,7 @@ static int nilfs_ioctl_change_cpmode(struct inode *inode, struct file *filp,
 	struct the_nilfs *nilfs = inode->i_sb->s_fs_info;
 	struct nilfs_transaction_info ti;
 	struct nilfs_cpmode cpmode;
-	int ret;
+	int ret, is_snapshot;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
@@ -240,6 +283,7 @@ static int nilfs_ioctl_change_cpmode(struct inode *inode, struct file *filp,
 	mutex_lock(&nilfs->ns_snapshot_mount_mutex);
 
 	nilfs_transaction_begin(inode->i_sb, &ti, 0);
+	is_snapshot = nilfs_cpfile_is_snapshot(nilfs->ns_cpfile, cpmode.cm_cno);
 	ret = nilfs_cpfile_change_cpmode(
 		nilfs->ns_cpfile, cpmode.cm_cno, cpmode.cm_mode);
 	if (unlikely(ret < 0))
@@ -248,6 +292,10 @@ static int nilfs_ioctl_change_cpmode(struct inode *inode, struct file *filp,
 		nilfs_transaction_commit(inode->i_sb); /* never fails */
 
 	mutex_unlock(&nilfs->ns_snapshot_mount_mutex);
+
+	if (is_snapshot > 0 && cpmode.cm_mode == NILFS_CHECKPOINT &&
+			nilfs_feature_track_live_blks(nilfs))
+		ret = nilfs_ioctl_fix_starving_segs(nilfs, inode);
 out:
 	mnt_drop_write_file(filp);
 	return ret;
